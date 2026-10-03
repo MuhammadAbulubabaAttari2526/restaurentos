@@ -32,6 +32,23 @@ describe('isolated sample workspace', () => {
     expect(payment).toMatchObject({ paidCents: 33600, paymentStatus: 'paid', duplicate: false })
   })
 
+  it('preserves a demo draft creation time when saving it again', async () => {
+    const draft = {
+      draftId: `test-draft-${crypto.randomUUID()}`,
+      type: 'takeaway',
+      items: [{ itemId: 'lemonade', quantity: 1 }],
+    }
+    await runDemoOperation('saveOrderDraft', draft)
+    let drafts = []
+    const unsubscribe = watchDemoRecords('draftOrders', (rows) => { drafts = rows })
+    const createdAt = drafts.find((entry) => entry.id === draft.draftId).createdAt
+
+    await runDemoOperation('saveOrderDraft', draft)
+
+    expect(drafts.find((entry) => entry.id === draft.draftId).createdAt.getTime()).toBe(createdAt.getTime())
+    unsubscribe()
+  })
+
   it('keeps demo order totals populated for display and payments', () => {
     activateDemoSession()
     let records = []

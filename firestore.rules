@@ -435,7 +435,8 @@ service cloud.firestore {
           && request.resource.data.status == 'draft'
           && request.resource.data.type in ['dine-in', 'takeaway', 'delivery', 'direct-bill']
           && request.resource.data.items is list && request.resource.data.items.size() > 0 && request.resource.data.items.size() <= 40
-          && request.resource.data.discountCents is int && request.resource.data.discountCents >= 0;
+          && request.resource.data.discountCents is int && request.resource.data.discountCents >= 0
+          && request.resource.data.createdAt == resource.data.get('createdAt', request.resource.data.createdAt);
         allow delete: if orderStaff(restaurantId) && resource.data.createdBy == request.auth.uid;
       }
 

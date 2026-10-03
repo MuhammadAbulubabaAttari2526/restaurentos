@@ -122,11 +122,15 @@ rulesTest('Firestore tenant and role rules', () => {
 
   it('limits drafts to their creator and prevents forged customer rollups', async () => {
     const waiter = user('waiter-1', 'waiter')
-    await assertSucceeds(setDoc(doc(waiter, 'restaurants/alpha/draftOrders/direct-bill-draft'), {
+    const draftRef = doc(waiter, 'restaurants/alpha/draftOrders/direct-bill-draft')
+    await assertSucceeds(setDoc(draftRef, {
       restaurantId: 'alpha', createdBy: 'waiter-1', status: 'draft', type: 'direct-bill',
       tableId: null, customerId: null, note: '', items: [{ itemId: 'soup', quantity: 1 }],
       discountCents: 0, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     }))
+    const savedDraft = await getDoc(draftRef)
+    await assertSucceeds(updateDoc(draftRef, { note: 'Updated draft', createdAt: savedDraft.data().createdAt }))
+    await assertFails(updateDoc(draftRef, { createdAt: serverTimestamp() }))
     const ownDrafts = query(collection(waiter, 'restaurants/alpha/draftOrders'), where('createdBy', '==', 'waiter-1'))
     await assertSucceeds(getDocs(ownDrafts))
     await assertFails(getDocs(collection(waiter, 'restaurants/alpha/draftOrders')))

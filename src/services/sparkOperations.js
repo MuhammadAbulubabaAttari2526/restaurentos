@@ -264,8 +264,8 @@ async function saveOrderDraft(data) {
       note: typeof data.note === 'string' ? data.note.trim().slice(0, 500) : '',
       items,
       discountCents,
+      createdAt: draft.exists() ? draft.data().createdAt : now,
       updatedAt: now,
-      ...(draft.exists() ? {} : { createdAt: now }),
     })
     return { draftId, duplicate: false }
   })

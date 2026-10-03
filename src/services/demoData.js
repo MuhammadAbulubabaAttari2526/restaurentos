@@ -459,9 +459,17 @@ export async function runDemoOperation(name, payload = {}) {
       updateRecord('users', payload.userId, { permissions: payload.permissions || [] })
       recordAudit('staff.permissions_updated', payload.userId)
       return { userId: payload.userId, permissions: payload.permissions || [] }
-    case 'saveOrderDraft':
-      saveDemoRecord('draftOrders', { ...payload, restaurantId: DEMO_RESTAURANT_ID, createdBy: demoUser.uid, status: 'draft', updatedAt: now }, payload.draftId)
-      return { draftId: payload.draftId, duplicate: false }
+    case 'saveOrderDraft': {
+      const draftId = payload.draftId || makeId('draft')
+      const { draftId: _requestedDraftId, ...draftValues } = payload
+      const values = { ...draftValues, restaurantId: DEMO_RESTAURANT_ID, createdBy: demoUser.uid, status: 'draft', updatedAt: now }
+      if (demoRecords.draftOrders.some((entry) => entry.id === draftId)) {
+        saveDemoRecord('draftOrders', values, draftId)
+      } else {
+        commit('draftOrders', [...demoRecords.draftOrders, { ...clone(values), id: draftId, createdAt: now }])
+      }
+      return { draftId, duplicate: false }
+    }
     case 'deleteOrderDraft':
       removeDemoRecord('draftOrders', payload.draftId)
       return { draftId: payload.draftId }
