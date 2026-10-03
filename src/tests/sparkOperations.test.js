@@ -36,9 +36,13 @@ describe('Spark order draft persistence', () => {
       const transaction = {
         get: async (reference) => snapshotFor(reference.path),
         set: (reference, value) => writes.push([reference.path, value]),
+        delete: (reference) => writes.push([reference.path, undefined]),
       }
       const result = await operation(transaction)
-      for (const [path, value] of writes) mocks.records.set(path, value)
+      for (const [path, value] of writes) {
+        if (value === undefined) mocks.records.delete(path)
+        else mocks.records.set(path, value)
+      }
       return result
     })
   })
@@ -55,6 +59,17 @@ describe('Spark order draft persistence', () => {
     await runSparkOperation('saveOrderDraft', draft)
 
     expect(mocks.records.get('restaurants/restaurant-1/draftOrders/draft-1').createdAt).toBe(createdAt)
+  })
+
+  it('allows a cashier to delete their own draft', async () => {
+    mocks.currentUser.uid = 'cashier-1'
+    mocks.currentUser.getIdTokenResult.mockResolvedValue({ claims: { restaurantId: 'restaurant-1', role: 'cashier' } })
+    mocks.records.set('restaurants/restaurant-1/draftOrders/cashier-draft', { createdBy: 'cashier-1' })
+
+    const result = await runSparkOperation('deleteOrderDraft', { draftId: 'cashier-draft' })
+
+    expect(result).toEqual({ draftId: 'cashier-draft', deleted: true })
+    expect(mocks.records.has('restaurants/restaurant-1/draftOrders/cashier-draft')).toBe(false)
   })
 })
 

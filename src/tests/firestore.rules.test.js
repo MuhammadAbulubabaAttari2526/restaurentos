@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { afterAll, beforeAll, describe, it } from 'vitest'
 import { assertFails, assertSucceeds, initializeTestEnvironment } from '@firebase/rules-unit-testing'
-import { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore'
+import { collection, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore'
 
 const rulesTest = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip
 
@@ -138,5 +138,12 @@ rulesTest('Firestore tenant and role rules', () => {
     const cashier = user('cashier-1', 'cashier')
     await assertSucceeds(getDoc(doc(cashier, 'restaurants/alpha/customers/customer-1')))
     await assertFails(updateDoc(doc(cashier, 'restaurants/alpha/customers/customer-1'), { totalSpendingCents: 1 }))
+    const cashierDraftRef = doc(cashier, 'restaurants/alpha/draftOrders/cashier-owned-draft')
+    await assertSucceeds(setDoc(cashierDraftRef, {
+      restaurantId: 'alpha', createdBy: 'cashier-1', status: 'draft', type: 'direct-bill',
+      tableId: null, customerId: null, note: '', items: [{ itemId: 'soup', quantity: 1 }],
+      discountCents: 0, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }))
+    await assertSucceeds(deleteDoc(cashierDraftRef))
   })
 })

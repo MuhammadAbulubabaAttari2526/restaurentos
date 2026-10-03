@@ -470,9 +470,13 @@ export async function runDemoOperation(name, payload = {}) {
       }
       return { draftId, duplicate: false }
     }
-    case 'deleteOrderDraft':
+    case 'deleteOrderDraft': {
+      const draft = demoRecords.draftOrders.find((entry) => entry.id === payload.draftId)
+      if (!draft) return { draftId: payload.draftId, deleted: false }
+      if (draft.createdBy !== demoUser.uid) throw new Error('This draft belongs to another team member.')
       removeDemoRecord('draftOrders', payload.draftId)
-      return { draftId: payload.draftId }
+      return { draftId: payload.draftId, deleted: true }
+    }
     case 'exportReport':
       return reportFor(payload.range)
     case 'getCustomerHistory': {

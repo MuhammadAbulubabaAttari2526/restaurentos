@@ -38,9 +38,7 @@ function useRecords(name, max = 150, enabled = true) {
   useEffect(() => {
     if (!enabled) return undefined
     if (!membership?.restaurantId) return undefined
-    const filters = name === 'draftOrders' && !['owner', 'manager'].includes(membership.role)
-      ? [['createdBy', '==', user.uid]]
-      : []
+    const filters = name === 'draftOrders' ? [['createdBy', '==', user.uid]] : []
     return watchRecords(membership.restaurantId, name, (next) => {
       setRecords(next)
       setError('')

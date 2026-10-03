@@ -1,11 +1,11 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it } from 'vitest'
 import App from '../App.jsx'
 import { AuthProvider } from '../context/AuthContext.jsx'
 import { createStableIntentId } from '../utils/idUtils.js'
 import { mergeOrderWithFinancials } from '../utils/orderMerge.js'
-import { activateDemoSession, clearDemoSession } from '../services/demoData.js'
+import { activateDemoSession, clearDemoSession, saveDemoRecord } from '../services/demoData.js'
 import { readPosDraft, writePosDraft } from '../utils/posDraftStorage.js'
 
 afterEach(() => {
@@ -90,6 +90,15 @@ describe('authentication routes', () => {
     const item = await screen.findByText('Availability regression item')
     expect(item.closest('tr')).toHaveTextContent('Available')
     expect(item.closest('tr')).not.toHaveTextContent('Unavailable')
+  })
+
+  it('shows owners only drafts they created in the POS draft list', async () => {
+    activateDemoSession()
+    saveDemoRecord('draftOrders', { createdBy: 'other-user', type: 'delivery' }, null)
+    renderApp('/pos')
+
+    const drafts = await screen.findByLabelText('Saved drafts')
+    expect(within(drafts).queryByRole('option', { name: /delivery/i })).not.toBeInTheDocument()
   })
 
   it('supports direct bill mode and adding by Enter in the point of sale flow', async () => {

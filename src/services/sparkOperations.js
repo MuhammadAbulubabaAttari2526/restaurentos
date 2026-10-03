@@ -272,7 +272,7 @@ async function saveOrderDraft(data) {
 }
 
 async function deleteOrderDraft(data) {
-  const actor = await actorFor()
+  const actor = await actorFor(['owner', 'manager', 'cashier', 'waiter'], { loadMember: false })
   const draftId = safeId(data.draftId, 'Draft')
   const draftRef = path(actor.restaurantId, 'draftOrders', draftId)
   return runTransaction(db, async (transaction) => {

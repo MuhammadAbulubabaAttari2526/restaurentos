@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   activateDemoSession, clearDemoSession, demoMembership, demoUser, isDemoSession,
-  runDemoOperation, watchDemoRecords,
+  runDemoOperation, saveDemoRecord, watchDemoRecords,
 } from '../services/demoData.js'
 
 afterEach(() => clearDemoSession())
@@ -47,6 +47,17 @@ describe('isolated sample workspace', () => {
 
     expect(drafts.find((entry) => entry.id === draft.draftId).createdAt.getTime()).toBe(createdAt.getTime())
     unsubscribe()
+  })
+
+  it('allows demo users to delete only their own drafts', async () => {
+    const ownDraftId = `test-draft-${crypto.randomUUID()}`
+    await runDemoOperation('saveOrderDraft', {
+      draftId: ownDraftId, type: 'takeaway', items: [{ itemId: 'lemonade', quantity: 1 }],
+    })
+    expect(await runDemoOperation('deleteOrderDraft', { draftId: ownDraftId })).toMatchObject({ deleted: true })
+
+    const foreignDraftId = saveDemoRecord('draftOrders', { createdBy: 'other-user' }, null)
+    await expect(runDemoOperation('deleteOrderDraft', { draftId: foreignDraftId })).rejects.toThrow('This draft belongs to another team member.')
   })
 
   it('keeps demo order totals populated for display and payments', () => {
