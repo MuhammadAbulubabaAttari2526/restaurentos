@@ -1140,12 +1140,12 @@ function FormDialog({ title, fields, initial, onClose, onSubmit, busy }) {
         {fields.map((field) => <label key={field.name}>
           {field.label}
           {field.type === 'select'
-            ? <select name={field.name} required={field.required} value={values[field.name]} onChange={(event) => setValues({ ...values, [field.name]: event.target.value })}><option value="" disabled>Select an option</option>{field.options?.map((option) => typeof option === 'string' ? <option key={option} value={option}>{option}</option> : <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+            ? <select name={field.name} required={field.required} value={values[field.name]} onChange={(event) => setValues({ ...values, [field.name]: event.target.value })}><option value="" disabled>Select an option</option>{field.options?.map((option) => typeof option === 'string' ? <option key={option} value={option}>{option}</option> : <option key={option.value} value={option.value}>{option.label?.replace(' (permission required)', '')}</option>)}</select>
             : field.type === 'file'
               ? <input name={field.name} type="file" accept={field.accept} />
               : field.type === 'textarea'
                 ? <textarea required={field.required} maxLength={field.maxLength} placeholder={field.placeholder} value={values[field.name]} onChange={(event) => setValues({ ...values, [field.name]: event.target.value })} />
-                : <input type={field.type || 'text'} required={field.required} min={field.min} step={field.step} placeholder={field.placeholder} value={values[field.name]} onChange={(event) => setValues({ ...values, [field.name]: event.target.value })} />}
+                : <input type={field.type || 'text'} required={field.required} min={field.name === 'quantity' && values.movementType === 'adjust' ? undefined : field.min} step={field.step} placeholder={field.placeholder} value={values[field.name]} onChange={(event) => setValues({ ...values, [field.name]: event.target.value })} />}
           {field.name === 'imageUrl' && <MenuImagePreview url={values[field.name]} />}
         </label>)}
         <div className="modal-actions"><button type="button" className="button button-subtle" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button></div>

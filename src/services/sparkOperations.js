@@ -13,7 +13,7 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { auth, db } from '../lib/firebase.js'
-import { applyPayment, applyRefund, calculateRecipeNeeds, isSettledPaymentStatus, priceMenuLine, shouldLoadFinancialForTransition } from '../../functions/domain.js'
+import { applyPayment, applyRefund, calculateRecipeNeeds, isSettledPaymentStatus, isValidDateKey, priceMenuLine, roundStockQuantity, shouldLoadFinancialForTransition } from '../../functions/domain.js'
 
 const path = (restaurantId, name, id) => doc(db, 'restaurants', restaurantId, name, id)
 const rows = (restaurantId, name) => collection(db, 'restaurants', restaurantId, name)
@@ -135,7 +135,7 @@ async function createOrder(data) {
     for (const [ingredientId, quantity] of recipeNeeds) {
       const stock = stockById.get(ingredientId)
       if (!stock?.exists()) fail('A menu recipe references stock that no longer exists.')
-      if (Number(stock.data().quantityOnHand || 0) < quantity) fail(`Not enough ${stock.data().name} in stock to send this order.`)
+      if (roundStockQuantity(stock.data().quantityOnHand || 0) < quantity) fail(`Not enough ${stock.data().name} in stock to send this order.`)
     }
 
     const subtotalCents = lines.reduce((sum, line) => sum + line.unitPriceCents * line.quantity, 0)
@@ -203,7 +203,7 @@ async function createOrder(data) {
       const stock = stockById.get(ingredientId).data()
       const movementId = `${requestId}_${ingredientId}`
       transaction.update(path(actor.restaurantId, 'inventory', ingredientId), {
-        quantityOnHand: Number(stock.quantityOnHand || 0) - quantity,
+        quantityOnHand: roundStockQuantity(roundStockQuantity(stock.quantityOnHand || 0) - quantity),
         lastMovementId: movementId,
         updatedAt: serverTimestamp(),
       })
@@ -359,7 +359,7 @@ async function transitionOrder(data) {
     for (const restock of restocks) {
       const movementId = `${orderId}_cancel_${restock.ingredientId}`
       transaction.update(path(actor.restaurantId, 'inventory', restock.ingredientId), {
-        quantityOnHand: Number(restock.stock.quantityOnHand || 0) + restock.quantity,
+        quantityOnHand: roundStockQuantity(roundStockQuantity(restock.stock.quantityOnHand || 0) + restock.quantity),
         lastMovementId: movementId,
         updatedAt: serverTimestamp(),
       })
@@ -501,7 +501,7 @@ async function adjustInventory(data) {
     const [stock, movement] = await Promise.all([transaction.get(stockRef), transaction.get(movementRef)])
     if (movement.exists()) return { movementId, duplicate: true }
     if (!stock.exists()) fail('Stock item not found.')
-    const nextQuantity = Number(stock.data().quantityOnHand || 0) + delta
+    const nextQuantity = roundStockQuantity(roundStockQuantity(stock.data().quantityOnHand || 0) + delta)
     if (nextQuantity < 0) fail('This movement would make stock negative.')
     transaction.update(stockRef, { quantityOnHand: nextQuantity, lastMovementId: movementId, updatedAt: serverTimestamp() })
     transaction.set(movementRef, {
@@ -526,7 +526,7 @@ async function recordExpense(data) {
   const amountCents = positiveCents(data.amountCents, 'Expense amount')
   const category = typeof data.category === 'string' ? data.category.trim() : ''
   const date = typeof data.date === 'string' ? data.date : ''
-  if (!category || category.length > 80 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) fail('Enter a valid expense category and date.')
+  if (!category || category.length > 80 || !isValidDateKey(date)) fail('Enter a valid expense category and date.')
   const expenseRef = path(actor.restaurantId, 'expenses', expenseId)
   return runTransaction(db, async (transaction) => {
     const existing = await transaction.get(expenseRef)

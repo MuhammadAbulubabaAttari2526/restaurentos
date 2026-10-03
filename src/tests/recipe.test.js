@@ -12,6 +12,13 @@ describe('recipe inventory consumption', () => {
     ], menu)).toEqual(new Map([['stock-a', 0.7], ['stock-b', 1]]))
   })
 
+  it('rounds aggregate recipe needs to three decimal places', () => {
+    const menu = new Map([['meal', { recipe: [{ ingredientId: 'stock-a', quantity: 0.33335 }] }]])
+
+    expect(calculateRecipeNeeds([{ itemId: 'meal', quantity: 3 }], menu))
+      .toEqual(new Map([['stock-a', 1]]))
+  })
+
   it('rejects invalid recipe references and non-positive ingredient quantities', () => {
     expect(() => calculateRecipeNeeds([{ itemId: 'meal', quantity: 1 }], new Map([
       ['meal', { recipe: [{ ingredientId: '../other-tenant', quantity: 1 }] }],

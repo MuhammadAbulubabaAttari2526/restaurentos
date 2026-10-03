@@ -86,10 +86,20 @@ export function calculateRecipeNeeds(orderLines, menuItems) {
       if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 100000) throw new Error('Recipe quantities must be positive and within the allowed range.')
       if (seen.has(ingredient.ingredientId)) throw new Error('A recipe cannot contain the same stock item twice.')
       seen.add(ingredient.ingredientId)
-      needs.set(ingredient.ingredientId, (needs.get(ingredient.ingredientId) || 0) + quantity * line.quantity)
+      needs.set(ingredient.ingredientId, roundStockQuantity((needs.get(ingredient.ingredientId) || 0) + quantity * line.quantity))
     }
   }
   return needs
+}
+
+export function roundStockQuantity(quantity) {
+  return Math.round((Number(quantity) + Number.EPSILON) * 1000) / 1000
+}
+
+export function isValidDateKey(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00.000Z`)
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value
 }
 
 export function applyPayment(financial, amountCents) {

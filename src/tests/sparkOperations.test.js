@@ -281,6 +281,48 @@ describe('Spark order draft persistence', () => {
 
     expect(result).toMatchObject({ targetTableId: 'target-table', duplicate: false })
   })
+
+  it('compares, deducts and restores recipe stock at three decimal places', async () => {
+    mocks.records.set('restaurants/restaurant-1/settings/profile', { taxRate: 0, paymentMethods: ['cash'] })
+    mocks.records.set('restaurants/restaurant-1/menuItems/precise-menu', {
+      name: 'Precise meal', priceCents: 500, available: true,
+      recipe: [{ ingredientId: 'precise-stock', quantity: 0.33335 }],
+    })
+    mocks.records.set('restaurants/restaurant-1/inventory/precise-stock', {
+      name: 'Precise stock', unit: 'kg', quantityOnHand: 0.9999,
+    })
+    mocks.getDocs.mockResolvedValue({ empty: true, docs: [] })
+
+    await runSparkOperation('createOrder', {
+      requestId: 'rounded-stock-order', type: 'takeaway',
+      items: [{ itemId: 'precise-menu', quantity: 3 }],
+    })
+    expect(mocks.records.get('restaurants/restaurant-1/inventory/precise-stock').quantityOnHand).toBe(0)
+
+    mocks.records.set('restaurants/restaurant-1/menuItems/precise-menu', {
+      name: 'Precise meal', priceCents: 500, available: true,
+      recipe: [{ ingredientId: 'precise-stock', quantity: 0.33335 }],
+    })
+    mocks.records.set('restaurants/restaurant-1/inventory/precise-stock', {
+      name: 'Precise stock', unit: 'kg', quantityOnHand: 0.2345,
+    })
+    mocks.records.set('restaurants/restaurant-1/orders/rounded-stock-cancel', {
+      status: 'queued', tableId: null, items: [{ itemId: 'precise-menu', quantity: 3 }],
+    })
+    mocks.records.set('restaurants/restaurant-1/orderFinancials/rounded-stock-cancel', { paidCents: 0, paymentStatus: 'unpaid' })
+
+    await runSparkOperation('transitionOrder', {
+      orderId: 'rounded-stock-cancel', requestId: 'rounded-stock-cancel-id', to: 'cancelled', reason: 'Test restore',
+    })
+
+    expect(mocks.records.get('restaurants/restaurant-1/inventory/precise-stock').quantityOnHand).toBe(1.235)
+  })
+
+  it('rejects impossible calendar dates when recording expenses', async () => {
+    await expect(runSparkOperation('recordExpense', {
+      expenseId: 'impossible-expense', amountCents: 100, category: 'Supplies', date: '2026-02-31',
+    })).rejects.toThrow('Enter a valid expense category and date.')
+  })
 })
 
 function snapshotFor(path) {

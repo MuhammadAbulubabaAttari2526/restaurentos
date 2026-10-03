@@ -229,8 +229,8 @@ service cloud.firestore {
       return ingredientId is string
         && exists(inventoryPath) && existsAfter(inventoryPath)
         && getAfter(inventoryPath).data.lastMovementId == movementId
-        && actualDelta >= data.quantity - 0.000001
-        && actualDelta <= data.quantity + 0.000001
+        && actualDelta >= data.quantity - 0.000501
+        && actualDelta <= data.quantity + 0.000501
         && getAfter(inventoryPath).data.quantityOnHand >= 0;
     }
 

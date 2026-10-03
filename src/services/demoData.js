@@ -1,4 +1,4 @@
-import { applyPayment, applyRefund, calculateRecipeNeeds, isSettledPaymentStatus, priceMenuLine } from '../../functions/domain.js'
+import { applyPayment, applyRefund, calculateRecipeNeeds, isSettledPaymentStatus, isValidDateKey, priceMenuLine, roundStockQuantity } from '../../functions/domain.js'
 
 export const DEMO_RESTAURANT_ID = 'restaurantos-demo'
 export const demoUser = Object.freeze({ uid: 'demo-owner', email: 'owner@restaurantos.demo', displayName: 'Demo Owner', emailVerified: true })
@@ -362,7 +362,7 @@ export async function runDemoOperation(name, payload = {}) {
       const needs = calculateRecipeNeeds(payload.items, menu)
       for (const [ingredientId, quantity] of needs) {
         const stock = demoRecords.inventory.find((entry) => entry.id === ingredientId)
-        if (!stock || stock.quantityOnHand < quantity) throw new Error(`Not enough ${stock?.name || 'recipe stock'} in the sample inventory.`)
+        if (!stock || roundStockQuantity(stock.quantityOnHand || 0) < quantity) throw new Error(`Not enough ${stock?.name || 'recipe stock'} in the sample inventory.`)
       }
       const sequence = demoRecords.orders.length + 1
       const orderNumber = `D-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${String(sequence).padStart(3, '0')}`
@@ -374,7 +374,7 @@ export async function runDemoOperation(name, payload = {}) {
       for (const [ingredientId, quantity] of needs) {
         const stock = demoRecords.inventory.find((entry) => entry.id === ingredientId)
         const movementId = `${id}_${ingredientId}`
-        updateRecord('inventory', ingredientId, { quantityOnHand: stock.quantityOnHand - quantity, lastMovementId: movementId })
+        updateRecord('inventory', ingredientId, { quantityOnHand: roundStockQuantity(roundStockQuantity(stock.quantityOnHand || 0) - quantity), lastMovementId: movementId })
         commit('stockMovements', [{ id: movementId, restaurantId: DEMO_RESTAURANT_ID, ingredientId, itemName: stock.name, unit: stock.unit, movementType: 'order_consumption', quantity: -quantity, orderId: id, reason: 'Order placed', createdBy: demoUser.uid, createdAt: now }, ...demoRecords.stockMovements])
       }
       recordAudit('order.created', id)
@@ -397,7 +397,7 @@ export async function runDemoOperation(name, payload = {}) {
           if (!stock) throw new Error('A cancelled order references stock that no longer exists.')
           const movementId = `${order.id}_cancel_${ingredientId}`
           updateRecord('inventory', ingredientId, {
-            quantityOnHand: Number(stock.quantityOnHand || 0) + quantity,
+            quantityOnHand: roundStockQuantity(roundStockQuantity(stock.quantityOnHand || 0) + quantity),
             lastMovementId: movementId,
             updatedAt: now,
           })
@@ -433,6 +433,7 @@ export async function runDemoOperation(name, payload = {}) {
       return { movementId: payload.movementId, quantityOnHand: next, duplicate: false }
     }
     case 'recordExpense': {
+      if (!isValidDateKey(payload.date)) throw new Error('Enter a valid expense category and date.')
       const expense = { id: payload.expenseId || makeId('expense'), restaurantId: DEMO_RESTAURANT_ID, ...payload, status: 'approved', createdBy: demoUser.uid, createdAt: now }
       if (demoRecords.expenses.some((entry) => entry.id === expense.id)) return { expenseId: expense.id, duplicate: true }
       commit('expenses', [expense, ...demoRecords.expenses])

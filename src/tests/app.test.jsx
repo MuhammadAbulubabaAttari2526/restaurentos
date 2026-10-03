@@ -175,6 +175,24 @@ describe('authentication routes', () => {
     expect(await screen.findByRole('option', { name: /table 3 · 3 seats/i })).toBeInTheDocument()
   })
 
+  it('allows negative inventory adjustment and labels it without a false permission warning', async () => {
+    activateDemoSession()
+    const runOperation = vi.spyOn(dataOperations, 'runOperation').mockResolvedValue({ movementId: 'adjustment-saved' })
+    renderApp('/inventory')
+
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Record movement' }))[0])
+    const movement = screen.getByLabelText('Movement')
+    expect(within(movement).getByRole('option', { name: 'Adjustment' })).toBeInTheDocument()
+    fireEvent.change(movement, { target: { value: 'adjust' } })
+    const quantity = screen.getByLabelText(/Quantity/)
+    expect(quantity).not.toHaveAttribute('min', '0.001')
+    fireEvent.change(quantity, { target: { value: '-0.5' } })
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Correct opening balance' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(runOperation).toHaveBeenCalledWith('adjustInventory', expect.objectContaining({ movementType: 'adjust', quantity: -0.5 })))
+  })
+
   it('shows a warning when an exported report is truncated', async () => {
     activateDemoSession()
     vi.spyOn(dataOperations, 'exportReport').mockResolvedValue({
