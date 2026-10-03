@@ -1,0 +1,650 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function member(restaurantId) {
+      let path = /databases/$(database)/documents/restaurants/$(restaurantId)/users/$(request.auth.uid);
+      let accountPath = /databases/$(database)/documents/accountMemberships/$(request.auth.uid);
+      return signedIn()
+        && exists(path)
+        && get(path).data.active == true
+        && (
+          (request.auth.token.get('restaurantId', '') == restaurantId
+            && request.auth.token.get('role', '') == get(path).data.role)
+          || (exists(accountPath)
+            && get(accountPath).data.active == true
+            && get(accountPath).data.restaurantId == restaurantId
+            && get(accountPath).data.role == get(path).data.role)
+        );
+    }
+
+    function role(restaurantId, allowed) {
+      let path = /databases/$(database)/documents/restaurants/$(restaurantId)/users/$(request.auth.uid);
+      return member(restaurantId) && get(path).data.role in allowed;
+    }
+
+    function manager(restaurantId) {
+      return role(restaurantId, ['owner', 'manager']);
+    }
+
+    function orderStaff(restaurantId) {
+      return role(restaurantId, ['owner', 'manager', 'cashier', 'waiter']);
+    }
+
+    function operationsStaff(restaurantId) {
+      return role(restaurantId, ['owner', 'manager', 'cashier', 'waiter']);
+    }
+
+    function hasPermission(restaurantId, permissionId) {
+      let path = /databases/$(database)/documents/restaurants/$(restaurantId)/users/$(request.auth.uid);
+      return member(restaurantId)
+        && (get(path).data.role in ['owner', 'manager']
+          || (get(path).data.permissions is list && permissionId in get(path).data.permissions));
+    }
+
+    function validStaffJoin(restaurantId, userId, invitationId, memberRole) {
+      let invitationPath = /databases/$(database)/documents/restaurants/$(restaurantId)/staffInvitations/$(invitationId);
+      let memberPath = /databases/$(database)/documents/restaurants/$(restaurantId)/users/$(userId);
+      let accountPath = /databases/$(database)/documents/accountMemberships/$(userId);
+      return signedIn()
+        && userId == request.auth.uid
+        && existsAfter(invitationPath)
+        && getAfter(invitationPath).data.restaurantId == restaurantId
+        && getAfter(invitationPath).data.email == request.auth.token.email
+        && getAfter(invitationPath).data.role == memberRole
+        && getAfter(invitationPath).data.active == true
+        && getAfter(invitationPath).data.status == 'claimed'
+        && getAfter(invitationPath).data.claimedBy == userId
+        && existsAfter(memberPath)
+        && getAfter(memberPath).data.email == request.auth.token.email
+        && getAfter(memberPath).data.role == memberRole
+        && getAfter(memberPath).data.active == true
+        && getAfter(memberPath).data.invitationId == invitationId
+        && getAfter(memberPath).data.createdBy == getAfter(invitationPath).data.createdBy
+        && getAfter(memberPath).data.createdAt == request.time
+        && existsAfter(accountPath)
+        && getAfter(accountPath).data.restaurantId == restaurantId
+        && getAfter(accountPath).data.role == memberRole
+        && getAfter(accountPath).data.active == true
+        && getAfter(accountPath).data.invitationId == invitationId
+        && getAfter(accountPath).data.createdAt == request.time;
+    }
+
+    function validMenuItem(data) {
+      return data.keys().hasAll(['name', 'priceCents', 'available'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 120
+        && data.priceCents is int && data.priceCents >= 0 && data.priceCents <= 100000000
+        && data.available is bool
+        && (!data.keys().hasAny(['imageUrl']) || (data.imageUrl is string && data.imageUrl.size() <= 2048 && (data.imageUrl == '' || data.imageUrl.matches('^https://.*'))))
+        && (!data.keys().hasAny(['recipe']) || (data.recipe is list && data.recipe.size() <= 30));
+    }
+
+    function validSettings(data) {
+      return data.keys().hasAll(['name', 'currency', 'taxRate', 'paymentMethods'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 120
+        && data.currency is string && data.currency.matches('^[A-Z]{3}$')
+        && data.taxRate is number && data.taxRate >= 0 && data.taxRate <= 1
+        && data.paymentMethods is list && data.paymentMethods.size() > 0 && data.paymentMethods.size() <= 3
+        && data.paymentMethods.hasOnly(['cash', 'card', 'digital']);
+    }
+
+    function validOrder(data, restaurantId, orderId) {
+      let financePath = /databases/$(database)/documents/restaurants/$(restaurantId)/orderFinancials/$(orderId);
+      let safeTableId = data.tableId is string ? data.tableId : '__invalid__';
+      let tablePath = /databases/$(database)/documents/restaurants/$(restaurantId)/tables/$(safeTableId);
+      return data.keys().hasOnly(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'note', 'items', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasAll(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'note', 'items', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.restaurantId == restaurantId
+        && data.orderNumber is string
+        && data.type in ['dine-in', 'takeaway', 'delivery', 'direct-bill']
+        && data.items is list && data.items.size() > 0 && data.items.size() <= 40
+        && data.status == 'queued'
+        && data.createdBy == request.auth.uid
+        && data.note is string && data.note.size() <= 500
+        && data.createdAt == request.time && data.updatedAt == request.time
+        && existsAfter(financePath)
+        && getAfter(financePath).data.restaurantId == restaurantId
+        && getAfter(financePath).data.orderId == orderId
+        && getAfter(financePath).data.items.size() == data.items.size()
+        && ((data.type == 'dine-in'
+            && data.tableId is string && data.tableId.size() > 0
+            && exists(tablePath) && existsAfter(tablePath)
+            && get(tablePath).data.status == 'available'
+            && getAfter(tablePath).data.status == 'occupied'
+            && getAfter(tablePath).data.currentOrderId == orderId
+            && getAfter(tablePath).data.name == data.tableName)
+          || (data.type in ['takeaway', 'delivery', 'direct-bill']
+            && data.tableId == null && data.tableName == ''));
+    }
+
+    function validFinancial(data, restaurantId, orderId) {
+      let orderPath = /databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId);
+      return data.keys().hasOnly(['restaurantId', 'orderId', 'customerId', 'items', 'subtotalCents', 'discountCents', 'taxCents', 'totalCents', 'paidCents', 'refundedCents', 'customerVisitCounted', 'status', 'paymentStatus', 'createdAt', 'updatedAt'])
+        && data.keys().hasAll(['restaurantId', 'orderId', 'items', 'subtotalCents', 'discountCents', 'taxCents', 'totalCents', 'paidCents', 'refundedCents', 'customerVisitCounted', 'status', 'paymentStatus', 'createdAt', 'updatedAt'])
+        && data.restaurantId == restaurantId
+        && data.orderId == orderId
+        && data.items is list && data.items.size() > 0 && data.items.size() <= 40
+        && data.subtotalCents is int && data.subtotalCents >= 0
+        && data.discountCents is int && data.discountCents >= 0 && data.discountCents <= data.subtotalCents
+        && data.taxCents is int && data.taxCents >= 0
+        && data.totalCents == data.subtotalCents - data.discountCents + data.taxCents
+        && (data.discountCents == 0 || hasPermission(restaurantId, 'discounts'))
+        && data.paidCents == 0 && data.refundedCents == 0
+        && data.customerVisitCounted == false
+        && data.status == 'active' && data.paymentStatus == 'unpaid'
+        && data.createdAt == request.time && data.updatedAt == request.time
+        && existsAfter(orderPath)
+        && getAfter(orderPath).data.restaurantId == restaurantId
+        && getAfter(orderPath).data.items.size() == data.items.size()
+        && getAfter(orderPath).data.status == 'queued';
+    }
+
+    function validFinanceLedgerChange(restaurantId, orderId, kind) {
+      let paymentId = request.resource.data.get('lastPaymentId', '');
+      let paymentPath = /databases/$(database)/documents/restaurants/$(restaurantId)/payments/$(paymentId);
+      return paymentId is string
+        && existsAfter(paymentPath)
+        && getAfter(paymentPath).data.restaurantId == restaurantId
+        && getAfter(paymentPath).data.orderId == orderId
+        && getAfter(paymentPath).data.kind == kind
+        && getAfter(paymentPath).data.recordedBy == request.auth.uid
+        && getAfter(paymentPath).data.createdAt == request.time
+        && getAfter(paymentPath).data.amountCents is int
+        && getAfter(paymentPath).data.amountCents > 0
+        && ((kind == 'payment'
+            && request.resource.data.paidCents - resource.data.paidCents == getAfter(paymentPath).data.amountCents)
+          || (kind == 'refund'
+            && request.resource.data.refundedCents - resource.data.refundedCents == getAfter(paymentPath).data.amountCents));
+    }
+
+    function validPaymentCreate(restaurantId, paymentId) {
+      let orderId = request.resource.data.get('orderId', '');
+      let financePath = /databases/$(database)/documents/restaurants/$(restaurantId)/orderFinancials/$(orderId);
+      return orderId is string
+        && exists(financePath)
+        && existsAfter(financePath)
+        && getAfter(financePath).data.lastPaymentId == paymentId
+        && getAfter(financePath).data.orderId == orderId
+        && request.resource.data.amountCents is int
+        && ((request.resource.data.kind == 'payment'
+            && getAfter(financePath).data.paidCents - get(financePath).data.paidCents == request.resource.data.amountCents)
+          || (request.resource.data.kind == 'refund'
+            && getAfter(financePath).data.refundedCents - get(financePath).data.refundedCents == request.resource.data.amountCents));
+    }
+
+    function validCustomerRollup(restaurantId, customerId) {
+      let financeId = request.resource.data.get('lastFinancialId', '');
+      let financePath = /databases/$(database)/documents/restaurants/$(restaurantId)/orderFinancials/$(financeId);
+      let paymentId = existsAfter(financePath) ? getAfter(financePath).data.get('lastPaymentId', '') : '';
+      let paymentPath = /databases/$(database)/documents/restaurants/$(restaurantId)/payments/$(paymentId);
+      let oldCount = resource.data.get('visitCount', 0);
+      let oldSpend = resource.data.get('totalSpendingCents', 0);
+      return financeId is string
+        && exists(financePath)
+        && existsAfter(financePath)
+        && get(financePath).data.customerId == customerId
+        && getAfter(financePath).data.diff(get(financePath).data).affectedKeys().hasAny(['paidCents', 'refundedCents'])
+        && paymentId is string
+        && existsAfter(paymentPath)
+        && getAfter(paymentPath).data.orderId == financeId
+        && getAfter(paymentPath).data.recordedBy == request.auth.uid
+        && ((getAfter(paymentPath).data.kind == 'payment'
+            && get(financePath).data.get('customerVisitCounted', false) == false
+            && getAfter(financePath).data.customerVisitCounted == true
+            && getAfter(financePath).data.paymentStatus == 'paid'
+            && request.resource.data.visitCount == oldCount + 1
+            && request.resource.data.totalSpendingCents == oldSpend + getAfter(financePath).data.totalCents
+            && request.resource.data.lastVisitAt == request.time)
+          || (getAfter(paymentPath).data.kind == 'refund'
+            && get(financePath).data.get('customerVisitCounted', false) == true
+            && getAfter(paymentPath).data.amountCents == getAfter(financePath).data.refundedCents - get(financePath).data.refundedCents
+            && request.resource.data.totalSpendingCents == oldSpend - getAfter(paymentPath).data.amountCents
+            && request.resource.data.visitCount == oldCount - (getAfter(financePath).data.customerVisitCounted == false ? 1 : 0)));
+    }
+
+    function movementChangesStockBy(data, movementId, restaurantId) {
+      let ingredientId = data.get('ingredientId', '');
+      let inventoryPath = /databases/$(database)/documents/restaurants/$(restaurantId)/inventory/$(ingredientId);
+      let actualDelta = getAfter(inventoryPath).data.quantityOnHand - get(inventoryPath).data.quantityOnHand;
+      return ingredientId is string
+        && exists(inventoryPath) && existsAfter(inventoryPath)
+        && getAfter(inventoryPath).data.lastMovementId == movementId
+        && actualDelta >= data.quantity - 0.000001
+        && actualDelta <= data.quantity + 0.000001
+        && getAfter(inventoryPath).data.quantityOnHand >= 0;
+    }
+
+    function validMovementIntent(data, restaurantId) {
+      let orderId = data.get('orderId', '');
+      let purchaseId = data.get('purchaseId', '');
+      let orderPath = /databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId);
+      let purchasePath = /databases/$(database)/documents/restaurants/$(restaurantId)/purchases/$(purchaseId);
+      return ((data.movementType in ['receive', 'waste', 'adjust']
+            && manager(restaurantId)
+            && data.quantity is number && data.quantity != 0
+            && ((data.movementType == 'receive' && data.quantity > 0)
+              || (data.movementType == 'waste' && data.quantity < 0)
+              || data.movementType == 'adjust'))
+          || (data.movementType == 'order_consumption'
+            && orderStaff(restaurantId)
+            && data.quantity is number && data.quantity < 0
+            && orderId is string && !exists(orderPath) && existsAfter(orderPath)
+            && getAfter(orderPath).data.status == 'queued'
+            && getAfter(orderPath).data.createdBy == data.createdBy)
+          || (data.movementType == 'purchase_received'
+            && manager(restaurantId)
+            && data.quantity is number && data.quantity > 0
+            && purchaseId is string && exists(purchasePath)
+            && get(purchasePath).data.status == 'ordered'
+            && existsAfter(purchasePath)
+            && getAfter(purchasePath).data.status == 'received'
+            && getAfter(purchasePath).data.lastReceiptId is string
+            && getAfter(purchasePath).data.items.hasAny([{
+              'ingredientId': data.ingredientId,
+              'itemName': data.itemName,
+              'quantity': data.quantity,
+              'unitCostCents': data.unitCostCents
+            }])));
+    }
+
+    function validInventoryMovement(restaurantId, itemId) {
+      let movementId = request.resource.data.get('lastMovementId', '');
+      let movementPath = /databases/$(database)/documents/restaurants/$(restaurantId)/stockMovements/$(movementId);
+      return movementId is string
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['quantityOnHand', 'averageCostCents', 'lastMovementId', 'updatedAt'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasAll(['quantityOnHand', 'lastMovementId', 'updatedAt'])
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.quantityOnHand is number
+        && existsAfter(movementPath)
+        && getAfter(movementPath).data.ingredientId == itemId
+        && getAfter(movementPath).data.restaurantId == restaurantId
+        && getAfter(movementPath).data.createdBy == request.auth.uid
+        && getAfter(movementPath).data.createdAt == request.time
+        && movementChangesStockBy(getAfter(movementPath).data, movementId, restaurantId)
+        && validMovementIntent(getAfter(movementPath).data, restaurantId)
+        && (getAfter(movementPath).data.movementType == 'purchase_received'
+          ? request.resource.data.averageCostCents is int && request.resource.data.averageCostCents >= 0
+          : request.resource.data.get('averageCostCents', 0) == resource.data.get('averageCostCents', 0));
+    }
+
+    function validStockMovementCreate(restaurantId, movementId) {
+      let data = request.resource.data;
+      let purchaseId = data.get('purchaseId', '');
+      let purchasePath = /databases/$(database)/documents/restaurants/$(restaurantId)/purchases/$(purchaseId);
+      return data.restaurantId == restaurantId
+        && data.createdBy == request.auth.uid
+        && data.createdAt == request.time
+        && ((data.movementType in ['receive', 'waste', 'adjust', 'order_consumption', 'purchase_received']
+            && data.keys().hasOnly(['restaurantId', 'ingredientId', 'itemName', 'unit', 'movementType', 'quantity', 'reason', 'orderId', 'unitCostCents', 'purchaseId', 'createdBy', 'createdAt'])
+            && data.ingredientId is string
+            && data.itemName is string
+            && data.unit is string
+            && data.quantity is number
+            && validMovementIntent(data, restaurantId)
+            && movementChangesStockBy(data, movementId, restaurantId))
+          || (data.movementType == 'purchase_receipt'
+            && manager(restaurantId)
+            && data.keys().hasOnly(['restaurantId', 'movementType', 'purchaseId', 'quantity', 'createdBy', 'createdAt'])
+            && data.quantity == 0
+            && purchaseId is string
+            && exists(purchasePath)
+            && get(purchasePath).data.status == 'ordered'
+            && existsAfter(purchasePath)
+            && getAfter(purchasePath).data.status == 'received'
+            && getAfter(purchasePath).data.lastReceiptId == movementId));
+    }
+
+    function validPurchaseReceipt(restaurantId, purchaseId) {
+      let receiptId = request.resource.data.get('lastReceiptId', '');
+      let receiptPath = /databases/$(database)/documents/restaurants/$(restaurantId)/stockMovements/$(receiptId);
+      return resource.data.status == 'ordered'
+        && request.resource.data.status == 'received'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'receivedBy', 'receivedAt', 'lastReceiptId', 'updatedAt'])
+        && request.resource.data.receivedBy == request.auth.uid
+        && request.resource.data.receivedAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && receiptId is string
+        && existsAfter(receiptPath)
+        && getAfter(receiptPath).data.movementType == 'purchase_receipt'
+        && getAfter(receiptPath).data.purchaseId == purchaseId
+        && getAfter(receiptPath).data.createdBy == request.auth.uid
+        && getAfter(receiptPath).data.createdAt == request.time;
+    }
+
+    match /accountMemberships/{userId} {
+      allow get: if signedIn() && request.auth.uid == userId;
+      allow list: if false;
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.restaurantId is string
+        && request.resource.data.active == true
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.keys().hasOnly(['restaurantId', 'role', 'active', 'invitationId', 'createdAt'])
+        && request.resource.data.role in ['manager', 'cashier', 'waiter']
+        && request.resource.data.invitationId is string
+        && validStaffJoin(request.resource.data.restaurantId, userId, request.resource.data.invitationId, request.resource.data.role);
+      allow update, delete: if false;
+    }
+
+    match /restaurants/{restaurantId} {
+      allow get: if member(restaurantId);
+      allow list, create, update, delete: if false;
+
+      match /users/{userId} {
+        allow get: if member(restaurantId)
+          && (request.auth.uid == userId || role(restaurantId, ['owner', 'manager']));
+        allow list: if role(restaurantId, ['owner', 'manager']);
+        allow create: if userId == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.keys().hasOnly(['email', 'displayName', 'role', 'active', 'permissions', 'invitationId', 'createdAt', 'createdBy'])
+          && request.resource.data.role in ['manager', 'cashier', 'waiter']
+          && request.resource.data.active == true
+          && request.resource.data.invitationId is string
+          && validStaffJoin(restaurantId, userId, request.resource.data.invitationId, request.resource.data.role);
+        allow update: if role(restaurantId, ['owner'])
+          && resource.data.role != 'owner'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active', 'updatedAt', 'permissions'])
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['active']) || request.resource.data.active is bool)
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['permissions'])
+            || ((resource.data.role == 'cashier' && request.resource.data.permissions.hasOnly(['discounts', 'refunds', 'voidOrders']))
+              || (resource.data.role == 'waiter' && request.resource.data.permissions.hasOnly(['discounts', 'voidOrders']))))
+          && (!request.resource.data.keys().hasAny(['updatedAt']) || request.resource.data.updatedAt == request.time);
+        allow delete: if false;
+      }
+
+      match /settings/{settingId} {
+        allow get, list: if role(restaurantId, ['owner', 'manager', 'cashier', 'waiter']);
+        allow create: if false;
+        allow update: if settingId == 'profile'
+          && role(restaurantId, ['owner'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'currency', 'taxRate', 'paymentMethods', 'updatedAt'])
+          && request.resource.data.updatedAt == request.time
+          && validSettings(request.resource.data);
+        allow delete: if false;
+      }
+
+      match /staffInvitations/{invitationId} {
+        allow get: if (resource.data.status == 'open' && resource.data.active == true && resource.data.expiresAt > request.time)
+          || role(restaurantId, ['owner']);
+        allow list: if role(restaurantId, ['owner']);
+        allow create: if role(restaurantId, ['owner'])
+          && request.resource.data.keys().hasOnly(['restaurantId', 'email', 'displayName', 'role', 'active', 'status', 'createdBy', 'createdAt', 'expiresAt'])
+          && request.resource.data.restaurantId == restaurantId
+          && request.resource.data.email is string
+          && request.resource.data.displayName is string
+          && request.resource.data.role in ['manager', 'cashier', 'waiter']
+          && request.resource.data.active == true
+          && request.resource.data.status == 'open'
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.expiresAt > request.time;
+        allow update: if (role(restaurantId, ['owner'])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active', 'updatedAt'])
+            && request.resource.data.active == false)
+          || (signedIn()
+            && request.auth.token.email == resource.data.email
+            && resource.data.active == true
+            && resource.data.status == 'open'
+            && resource.data.expiresAt > request.time
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'claimedBy', 'claimedAt', 'updatedAt'])
+            && request.resource.data.status == 'claimed'
+            && request.resource.data.claimedBy == request.auth.uid
+            && request.resource.data.claimedAt == request.time
+            && request.resource.data.updatedAt == request.time
+            && validStaffJoin(restaurantId, request.auth.uid, invitationId, resource.data.role));
+        allow delete: if role(restaurantId, ['owner']) && resource.data.status == 'open';
+      }
+
+      match /categories/{categoryId} {
+        allow read: if orderStaff(restaurantId);
+        allow create, update, delete: if manager(restaurantId);
+      }
+
+      match /menuItems/{itemId} {
+        allow read: if orderStaff(restaurantId);
+        allow create: if manager(restaurantId) && validMenuItem(request.resource.data);
+        allow update: if manager(restaurantId) && validMenuItem(request.resource.data);
+        allow delete: if manager(restaurantId);
+      }
+
+      match /orders/{orderId} {
+        allow read: if operationsStaff(restaurantId);
+        allow create: if orderStaff(restaurantId) && validOrder(request.resource.data, restaurantId, orderId);
+        allow update: if operationsStaff(restaurantId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancellationReason', 'cancelledBy', 'tableId', 'tableName', 'updatedAt'])
+          && request.resource.data.status in ['queued', 'preparing', 'ready', 'served', 'cancelled']
+          && ((request.resource.data.status == resource.data.status
+              && request.resource.data.diff(resource.data).affectedKeys().hasAny(['tableId', 'tableName']))
+            || (resource.data.status == 'queued' && request.resource.data.status in ['preparing', 'cancelled'])
+            || (resource.data.status == 'preparing' && request.resource.data.status in ['ready', 'cancelled'])
+            || (resource.data.status == 'ready' && request.resource.data.status == 'served'))
+          && (request.resource.data.status != 'cancelled' || hasPermission(restaurantId, 'voidOrders'));
+        allow delete: if false;
+      }
+
+      match /draftOrders/{draftId} {
+        allow get, list: if orderStaff(restaurantId)
+          && (resource.data.createdBy == request.auth.uid || role(restaurantId, ['owner', 'manager']));
+        allow create, update: if orderStaff(restaurantId)
+          && request.resource.data.keys().hasOnly(['restaurantId', 'createdBy', 'status', 'type', 'tableId', 'customerId', 'note', 'items', 'discountCents', 'createdAt', 'updatedAt'])
+          && request.resource.data.restaurantId == restaurantId
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.status == 'draft'
+          && request.resource.data.type in ['dine-in', 'takeaway', 'delivery', 'direct-bill']
+          && request.resource.data.items is list && request.resource.data.items.size() > 0 && request.resource.data.items.size() <= 40
+          && request.resource.data.discountCents is int && request.resource.data.discountCents >= 0;
+        allow delete: if orderStaff(restaurantId) && resource.data.createdBy == request.auth.uid;
+      }
+
+      match /orderFinancials/{orderId} {
+        allow read: if role(restaurantId, ['owner', 'manager', 'cashier']) || hasPermission(restaurantId, 'voidOrders');
+        allow create: if orderStaff(restaurantId) && validFinancial(request.resource.data, restaurantId, orderId);
+        allow update: if (
+            role(restaurantId, ['owner', 'manager', 'cashier'])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paidCents', 'paymentStatus', 'customerVisitCounted', 'lastPaymentId', 'updatedAt'])
+            && request.resource.data.paidCents >= resource.data.paidCents
+            && request.resource.data.paidCents <= resource.data.totalCents
+            && request.resource.data.paymentStatus == (request.resource.data.paidCents == resource.data.totalCents ? 'paid' : 'partially_paid')
+            && request.resource.data.refundedCents == resource.data.refundedCents
+            && validFinanceLedgerChange(restaurantId, orderId, 'payment')
+          ) || (
+            hasPermission(restaurantId, 'refunds')
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['refundedCents', 'paymentStatus', 'customerVisitCounted', 'lastPaymentId', 'updatedAt'])
+            && request.resource.data.refundedCents >= resource.data.refundedCents
+            && request.resource.data.refundedCents <= resource.data.paidCents
+            && request.resource.data.paymentStatus == (request.resource.data.refundedCents == resource.data.paidCents ? 'refunded' : 'partially_refunded')
+            && (request.resource.data.customerVisitCounted == resource.data.customerVisitCounted
+              || (!request.resource.data.customerVisitCounted && resource.data.customerVisitCounted == true && request.resource.data.refundedCents == resource.data.paidCents))
+            && validFinanceLedgerChange(restaurantId, orderId, 'refund')
+          ) || (
+            hasPermission(restaurantId, 'voidOrders')
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && request.resource.data.status == 'cancelled'
+          );
+        allow delete: if false;
+      }
+
+      match /tables/{tableId} {
+        allow read: if orderStaff(restaurantId);
+        allow create: if manager(restaurantId)
+          && request.resource.data.keys().hasAll(['name', 'capacity', 'status'])
+          && request.resource.data.name is string
+          && request.resource.data.capacity is int
+          && request.resource.data.capacity > 0
+          && request.resource.data.status == 'available'
+          && request.resource.data.currentOrderId == null;
+        allow update: if (
+            manager(restaurantId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'capacity', 'status', 'currentOrderId', 'updatedAt', 'mergedInto', 'mergedTableIds', 'mergedTableNames', 'unmergedCapacity'])
+            && request.resource.data.name is string
+            && request.resource.data.capacity is int
+            && request.resource.data.capacity > 0
+            && request.resource.data.status in ['available', 'occupied', 'merged']
+            && ((request.resource.data.status == 'available' && request.resource.data.currentOrderId == null)
+              || (request.resource.data.status == 'occupied' && request.resource.data.currentOrderId is string)
+              || (request.resource.data.status == 'merged' && request.resource.data.mergedInto is string))
+          ) || (
+            orderStaff(restaurantId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'currentOrderId', 'updatedAt'])
+            && ((request.resource.data.status == 'available' && request.resource.data.currentOrderId == null)
+              || (request.resource.data.status == 'occupied' && request.resource.data.currentOrderId is string))
+          );
+        allow delete: if manager(restaurantId)
+          && resource.data.status == 'available'
+          && !resource.data.keys().hasAny(['mergedTableIds', 'mergedInto']);
+      }
+
+      match /reservations/{reservationId} {
+        allow read: if orderStaff(restaurantId);
+        allow create: if orderStaff(restaurantId)
+          && request.resource.data.keys().hasOnly(['restaurantId', 'tableId', 'tableName', 'guestName', 'phone', 'covers', 'startsAt', 'endsAt', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+          && request.resource.data.restaurantId == restaurantId
+          && request.resource.data.tableId is string
+          && request.resource.data.guestName is string
+          && request.resource.data.guestName.size() > 0
+          && request.resource.data.covers is int && request.resource.data.covers > 0
+          && request.resource.data.status == 'booked'
+          && request.resource.data.endsAt > request.resource.data.startsAt
+          && get(/databases/$(database)/documents/restaurants/$(restaurantId)/tables/$(request.resource.data.tableId)).data.status == 'available'
+          && request.resource.data.covers <= get(/databases/$(database)/documents/restaurants/$(restaurantId)/tables/$(request.resource.data.tableId)).data.capacity
+          && request.resource.data.createdBy == request.auth.uid;
+        allow update: if orderStaff(restaurantId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'seatedBy', 'seatedAt', 'cancellationReason', 'cancelledBy', 'updatedAt'])
+          && ((request.resource.data.status == 'seated' && resource.data.status == 'booked' && request.resource.data.seatedBy == request.auth.uid)
+            || (request.resource.data.status == 'cancelled' && resource.data.status == 'booked' && request.resource.data.cancelledBy == request.auth.uid));
+        allow delete: if false;
+      }
+
+      match /inventory/{itemId} {
+        allow read: if orderStaff(restaurantId);
+        allow create: if manager(restaurantId)
+          && request.resource.data.keys().hasOnly(['name', 'unit', 'quantityOnHand', 'reorderLevel', 'createdAt'])
+          && request.resource.data.keys().hasAll(['name', 'unit', 'quantityOnHand', 'reorderLevel', 'createdAt'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120
+          && request.resource.data.unit is string
+          && request.resource.data.unit.size() > 0 && request.resource.data.unit.size() <= 20
+          && request.resource.data.quantityOnHand == 0
+          && request.resource.data.reorderLevel is number
+          && request.resource.data.reorderLevel >= 0
+          && request.resource.data.createdAt == request.time;
+        allow update: if (
+            manager(restaurantId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'unit', 'reorderLevel', 'updatedAt'])
+            && request.resource.data.name is string
+            && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120
+            && request.resource.data.unit is string
+            && request.resource.data.unit.size() > 0 && request.resource.data.unit.size() <= 20
+            && request.resource.data.reorderLevel is number
+            && request.resource.data.reorderLevel >= 0
+            && request.resource.data.updatedAt == request.time
+            && request.resource.data.quantityOnHand == resource.data.quantityOnHand
+            && request.resource.data.get('averageCostCents', 0) == resource.data.get('averageCostCents', 0)
+            && request.resource.data.get('lastMovementId', '') == resource.data.get('lastMovementId', '')
+          ) || validInventoryMovement(restaurantId, itemId);
+        allow delete: if manager(restaurantId) && resource.data.quantityOnHand == 0;
+      }
+
+      match /stockMovements/{movementId} {
+        allow read: if manager(restaurantId);
+        allow create: if validStockMovementCreate(restaurantId, movementId);
+        allow update, delete: if false;
+      }
+
+      match /suppliers/{supplierId} {
+        allow read, create, update, delete: if manager(restaurantId);
+      }
+
+      match /purchases/{purchaseId} {
+        allow read: if manager(restaurantId);
+        allow create: if manager(restaurantId)
+          && request.resource.data.keys().hasOnly(['restaurantId', 'supplierId', 'supplierName', 'items', 'totalCents', 'reference', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+          && request.resource.data.restaurantId == restaurantId
+          && request.resource.data.supplierId is string
+          && request.resource.data.items is list && request.resource.data.items.size() > 0 && request.resource.data.items.size() <= 30
+          && request.resource.data.totalCents is int && request.resource.data.totalCents >= 0
+          && request.resource.data.status == 'ordered'
+          && request.resource.data.createdBy == request.auth.uid;
+        allow update: if manager(restaurantId)
+          && validPurchaseReceipt(restaurantId, purchaseId);
+        allow delete: if false;
+      }
+
+      match /expenses/{expenseId} {
+        allow read: if role(restaurantId, ['owner', 'manager']);
+        allow create: if manager(restaurantId)
+          && request.resource.data.keys().hasOnly(['restaurantId', 'amountCents', 'category', 'description', 'date', 'method', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+          && request.resource.data.restaurantId == restaurantId
+          && request.resource.data.amountCents is int && request.resource.data.amountCents > 0
+          && request.resource.data.category is string && request.resource.data.category.size() > 0
+          && request.resource.data.date.matches('^\\d{4}-\\d{2}-\\d{2}$')
+          && request.resource.data.status == 'approved'
+          && request.resource.data.createdBy == request.auth.uid;
+        allow update, delete: if false;
+      }
+
+      match /customers/{customerId} {
+        allow read: if role(restaurantId, ['owner', 'manager', 'cashier']);
+        allow create: if role(restaurantId, ['owner', 'manager', 'cashier'])
+          && request.resource.data.keys().hasOnly(['name', 'phone', 'email', 'createdAt', 'createdBy'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 120;
+        allow update: if role(restaurantId, ['owner', 'manager', 'cashier'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone', 'email', 'visitCount', 'totalSpendingCents', 'lastVisitAt', 'lastFinancialId', 'updatedAt'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 120
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['visitCount', 'totalSpendingCents', 'lastVisitAt', 'lastFinancialId'])
+            || validCustomerRollup(restaurantId, customerId));
+        allow delete: if manager(restaurantId);
+      }
+
+      match /payments/{paymentId} {
+        allow read: if role(restaurantId, ['owner', 'manager', 'cashier']);
+        allow create: if role(restaurantId, ['owner', 'manager', 'cashier'])
+          && request.resource.data.keys().hasOnly(['restaurantId', 'orderId', 'amountCents', 'method', 'reference', 'kind', 'reason', 'recordedBy', 'createdAt'])
+          && request.resource.data.restaurantId == restaurantId
+          && request.resource.data.amountCents is int && request.resource.data.amountCents > 0
+          && request.resource.data.kind in ['payment', 'refund']
+          && request.resource.data.recordedBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && validPaymentCreate(restaurantId, paymentId);
+        allow update, delete: if false;
+      }
+
+      match /auditLogs/{auditId} {
+        allow read: if role(restaurantId, ['owner', 'manager']);
+        allow create: if operationsStaff(restaurantId)
+          && request.resource.data.keys().hasOnly(['action', 'entityId', 'actorId', 'createdAt', 'amountCents', 'quantity', 'reason'])
+          && request.resource.data.action is string
+          && request.resource.data.actorId == request.auth.uid
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      match /operationKeys/{keyId} {
+        allow get: if operationsStaff(restaurantId);
+        allow list: if false;
+        allow create: if operationsStaff(restaurantId)
+          && request.resource.data.keys().hasOnly(['actorId', 'createdAt'])
+          && request.resource.data.actorId == request.auth.uid
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      match /counters/{counterId} {
+        allow get: if orderStaff(restaurantId);
+        allow list: if false;
+        allow create, update: if orderStaff(restaurantId)
+          && request.resource.data.keys().hasOnly(['value', 'updatedAt'])
+          && request.resource.data.value is int && request.resource.data.value > 0
+          && request.resource.data.updatedAt == request.time;
+        allow delete: if false;
+      }
+    }
+  }
+}

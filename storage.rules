@@ -1,0 +1,26 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function activeMenuStaff(restaurantId) {
+      let userPath = /databases/(default)/documents/restaurants/$(restaurantId)/users/$(request.auth.uid);
+      return request.auth != null
+        && request.auth.token.restaurantId == restaurantId
+        && request.auth.token.role in ['owner', 'manager', 'cashier', 'waiter']
+        && firestore.exists(userPath)
+        && firestore.get(userPath).data.active == true
+        && firestore.get(userPath).data.role == request.auth.token.role;
+    }
+
+    match /restaurants/{restaurantId}/menu/{fileName} {
+      allow read: if activeMenuStaff(restaurantId);
+      allow write: if activeMenuStaff(restaurantId)
+        && request.auth.token.role in ['owner', 'manager']
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
