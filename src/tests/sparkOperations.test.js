@@ -176,6 +176,16 @@ describe('Spark order draft persistence', () => {
 
     expect(report.truncated).toBe(true)
   })
+
+  it('blocks reservation creation when the mocked overlap query finds a booking', async () => {
+    mocks.records.set('restaurants/restaurant-1/tables/table-1', { name: 'Table 1', capacity: 4, status: 'available' })
+    mocks.getDocs.mockResolvedValue({ empty: false, docs: [{ id: 'existing-booking' }] })
+
+    await expect(runSparkOperation('createReservation', {
+      reservationId: 'overlap-reservation', tableId: 'table-1', guestName: 'Guest', covers: 2,
+      startsAtMillis: Date.now() + 86400000, durationMinutes: 90,
+    })).rejects.toThrow('That table already has a reservation during this time.')
+  })
 })
 
 function snapshotFor(path) {

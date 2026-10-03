@@ -125,19 +125,6 @@ async function createOrder(data) {
       if (Number(stock.data().quantityOnHand || 0) < quantity) fail(`Not enough ${stock.data().name} in stock to send this order.`)
     }
 
-    let activeReservations = null
-    if (tableRef) {
-      const now = new Date()
-      activeReservations = await getDocs(query(
-        rows(actor.restaurantId, 'reservations'),
-        where('tableId', '==', tableId),
-        where('status', '==', 'booked'),
-        where('startsAt', '<=', now),
-        where('endsAt', '>', now),
-      ))
-      if (!activeReservations.empty) fail('That table has an active reservation. Choose another table.')
-    }
-
     const subtotalCents = lines.reduce((sum, line) => sum + line.unitPriceCents * line.quantity, 0)
     const discountCents = Number(data.discountCents || 0)
     if (!Number.isSafeInteger(discountCents) || discountCents < 0 || discountCents > subtotalCents) fail('Discount must be between zero and the order subtotal.')
@@ -166,6 +153,18 @@ async function createOrder(data) {
       createdBy: actor.uid,
       createdAt,
       updatedAt: createdAt,
+    }
+    if (tableRef) {
+      const now = new Date()
+      // getDocs is not part of the transaction; this narrows the race window but does not eliminate it.
+      const activeReservations = await getDocs(query(
+        rows(actor.restaurantId, 'reservations'),
+        where('tableId', '==', tableId),
+        where('status', '==', 'booked'),
+        where('startsAt', '<=', now),
+        where('endsAt', '>', now),
+      ))
+      if (!activeReservations.empty) fail('That table has an active reservation. Choose another table.')
     }
     transaction.set(orderRef, order)
     transaction.set(counterRef, { value: sequence, updatedAt: serverTimestamp() })
@@ -556,6 +555,7 @@ async function createReservation(data) {
     if (existing.exists()) return { reservationId, duplicate: true }
     if (!table.exists() || table.data().status !== 'available') fail('That table is not available for reservation.')
     if (covers > Number(table.data().capacity || 0)) fail('Guest count exceeds this table’s seating capacity.')
+    // getDocs is not part of the transaction; this narrows the race window but does not eliminate it.
     const overlap = await getDocs(query(
       rows(actor.restaurantId, 'reservations'),
       where('tableId', '==', tableId),
@@ -631,7 +631,11 @@ async function mergeTables(data) {
     if (!target.exists() || !source.exists()) fail('One of the tables no longer exists.')
     if (target.data().status !== 'available' || source.data().status !== 'available') fail('Only two available tables can be combined.')
     if (target.data().mergedInto || source.data().mergedInto || target.data().mergedTableIds?.length || source.data().mergedTableIds?.length) fail('Unmerge the existing table group before changing it.')
+    const targetCapacity = Number(target.data().capacity || 0)
+    const sourceCapacity = Number(source.data().capacity || 0)
+    if (targetCapacity < 1 || sourceCapacity < 1 || targetCapacity + sourceCapacity > 100) fail('Combined table capacity must be between 2 and 100.')
     const now = new Date()
+    // getDocs is not part of the transaction; this narrows the race window but does not eliminate it.
     const [targetBookings, sourceBookings] = await Promise.all([targetTableId, sourceTableId].map((tableId) => getDocs(query(
       rows(actor.restaurantId, 'reservations'),
       where('tableId', '==', tableId),
@@ -640,9 +644,6 @@ async function mergeTables(data) {
       limit(1),
     ))))
     if (!targetBookings.empty || !sourceBookings.empty) fail('Tables with upcoming reservations cannot be combined.')
-    const targetCapacity = Number(target.data().capacity || 0)
-    const sourceCapacity = Number(source.data().capacity || 0)
-    if (targetCapacity < 1 || sourceCapacity < 1 || targetCapacity + sourceCapacity > 100) fail('Combined table capacity must be between 2 and 100.')
     transaction.update(targetRef, {
       capacity: targetCapacity + sourceCapacity,
       unmergedCapacity: targetCapacity,
@@ -669,6 +670,9 @@ async function unmergeTables(data) {
     const sourceRefs = sourceIds.map((id) => path(actor.restaurantId, 'tables', safeId(id, 'Merged table')))
     const sourceSnapshots = await Promise.all(sourceRefs.map((ref) => transaction.get(ref)))
     if (sourceSnapshots.some((source) => !source.exists() || source.data().status !== 'merged' || source.data().mergedInto !== targetTableId)) fail('A merged table has changed; refresh the floor and try again.')
+    const capacity = Number(target.data().unmergedCapacity)
+    if (!Number.isInteger(capacity) || capacity < 1) fail('Original table capacity is invalid.')
+    // getDocs is not part of the transaction; this narrows the race window but does not eliminate it.
     const bookings = await getDocs(query(
       rows(actor.restaurantId, 'reservations'),
       where('tableId', '==', targetTableId),
@@ -677,8 +681,6 @@ async function unmergeTables(data) {
       limit(1),
     ))
     if (!bookings.empty) fail('Cancel or complete the table reservation before unmerging.')
-    const capacity = Number(target.data().unmergedCapacity)
-    if (!Number.isInteger(capacity) || capacity < 1) fail('Original table capacity is invalid.')
     transaction.update(targetRef, {
       capacity,
       unmergedCapacity: null,
@@ -707,7 +709,12 @@ async function transferOrderTable(data) {
     const oldRef = path(actor.restaurantId, 'tables', current.tableId)
     const targetRef = path(actor.restaurantId, 'tables', targetTableId)
     const [oldTable, targetTable] = await Promise.all([transaction.get(oldRef), transaction.get(targetRef)])
+    if (!oldTable.exists() || oldTable.data().currentOrderId !== orderId) fail('The original table is no longer assigned to this order.')
+    if (!targetTable.exists() || targetTable.data().status !== 'available') fail('The target table is occupied or reserved right now.')
+    const covers = (current.items || []).reduce((sum, item) => sum + item.quantity, 0)
+    if (covers > Number(targetTable.data().capacity || 0)) fail('The target table does not have enough seats for this order.')
     const now = new Date()
+    // getDocs is not part of the transaction; this narrows the race window but does not eliminate it.
     const reservations = await getDocs(query(
       rows(actor.restaurantId, 'reservations'),
       where('tableId', '==', targetTableId),
@@ -716,10 +723,7 @@ async function transferOrderTable(data) {
       where('endsAt', '>', now),
       limit(1),
     ))
-    if (!oldTable.exists() || oldTable.data().currentOrderId !== orderId) fail('The original table is no longer assigned to this order.')
-    if (!targetTable.exists() || targetTable.data().status !== 'available' || !reservations.empty) fail('The target table is occupied or reserved right now.')
-    const covers = (current.items || []).reduce((sum, item) => sum + item.quantity, 0)
-    if (covers > Number(targetTable.data().capacity || 0)) fail('The target table does not have enough seats for this order.')
+    if (!reservations.empty) fail('The target table is occupied or reserved right now.')
     transaction.update(oldRef, { status: 'available', currentOrderId: null, updatedAt: serverTimestamp() })
     transaction.update(targetRef, { status: 'occupied', currentOrderId: orderId, updatedAt: serverTimestamp() })
     transaction.update(orderRef, { tableId: targetTableId, tableName: targetTable.data().name, updatedAt: serverTimestamp() })
