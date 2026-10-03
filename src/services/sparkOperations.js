@@ -155,6 +155,7 @@ async function createOrder(data) {
         selectedAddOns: selectedAddOns.map(({ id, name: addOnName }) => ({ id, name: addOnName })),
       })),
       status: 'queued',
+      paymentStatus: 'unpaid',
       createdBy: actor.uid,
       createdAt,
       updatedAt: createdAt,
@@ -309,7 +310,7 @@ async function transitionOrder(data) {
       if ((finance.data().paidCents || 0) > 0) fail('Record a refund before cancelling a paid order.')
     }
     const tableRef = order.data().tableId ? path(actor.restaurantId, 'tables', order.data().tableId) : null
-    const paymentState = finance?.data()?.paymentStatus
+    const paymentState = order.data().paymentStatus || finance?.data()?.paymentStatus
     const table = tableRef && (to === 'cancelled' || (to === 'served' && isSettledPaymentStatus(paymentState)))
       ? await transaction.get(tableRef)
       : null
@@ -367,6 +368,7 @@ async function recordPayment(data) {
       lastPaymentId: paymentId,
       updatedAt: serverTimestamp(),
     })
+    transaction.update(orderRef, { paymentStatus: update.paymentStatus, updatedAt: serverTimestamp() })
     if (countVisit) transaction.update(customerRef, {
       visitCount: increment(1),
       totalSpendingCents: increment(finance.data().totalCents),
@@ -389,12 +391,13 @@ async function recordRefund(data) {
   const refundId = safeId(data.refundId, 'Refund')
   const amountCents = positiveCents(data.amountCents, 'Refund amount')
   if (typeof data.reason !== 'string' || !data.reason.trim()) fail('Enter a refund reason.')
+  const orderRef = path(actor.restaurantId, 'orders', orderId)
   const financeRef = path(actor.restaurantId, 'orderFinancials', orderId)
   const paymentRef = path(actor.restaurantId, 'payments', refundId)
   return runTransaction(db, async (transaction) => {
-    const [finance, payment] = await Promise.all([transaction.get(financeRef), transaction.get(paymentRef)])
+    const [order, finance, payment] = await Promise.all([transaction.get(orderRef), transaction.get(financeRef), transaction.get(paymentRef)])
     if (payment.exists()) return { refundId, duplicate: true }
-    if (!finance.exists()) fail('Order not found.')
+    if (!order.exists() || !finance.exists()) fail('Order not found.')
     const { refundedCents, fullyRefunded, paymentStatus } = applyRefund(finance.data(), amountCents)
     const customerRef = finance.data().customerId ? path(actor.restaurantId, 'customers', finance.data().customerId) : null
     const customer = customerRef ? await transaction.get(customerRef) : null
@@ -415,6 +418,7 @@ async function recordRefund(data) {
       ...(fullyRefunded && finance.data().customerVisitCounted ? { customerVisitCounted: false } : {}),
       updatedAt: serverTimestamp(),
     })
+    transaction.update(orderRef, { paymentStatus, updatedAt: serverTimestamp() })
     if (customerRef && customer?.exists() && finance.data().customerVisitCounted) transaction.update(customerRef, {
       totalSpendingCents: increment(-amountCents),
       ...(fullyRefunded ? { visitCount: increment(-1) } : {}),

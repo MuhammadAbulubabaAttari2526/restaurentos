@@ -1,4 +1,4 @@
-import { applyPayment, applyRefund, calculateRecipeNeeds, priceMenuLine } from '../../functions/domain.js'
+import { applyPayment, applyRefund, calculateRecipeNeeds, isSettledPaymentStatus, priceMenuLine } from '../../functions/domain.js'
 
 export const DEMO_RESTAURANT_ID = 'restaurantos-demo'
 export const demoUser = Object.freeze({ uid: 'demo-owner', email: 'owner@restaurantos.demo', displayName: 'Demo Owner', emailVerified: true })
@@ -58,6 +58,7 @@ function createDemoRecords() {
     customerId: order.customerId,
     items: order.items.map(({ itemId, name, quantity, unitPriceCents, categoryId, categoryName, note, selectedVariant, selectedAddOns }) => ({ itemId, name, quantity, unitPriceCents, categoryId, categoryName, note, selectedVariant, selectedAddOns })),
     status: order.status,
+    paymentStatus: order.status === 'served' ? 'paid' : 'unpaid',
     createdBy: demoUser.uid,
     createdAt: order.createdAt,
     updatedAt: order.createdAt,
@@ -259,6 +260,7 @@ function applyDemoPayment(orderId, paymentId, amountCents, kind, values = {}) {
     ? { ...transition, customerVisitCounted: transition.customerVisitCounted || finance.customerVisitCounted, lastPaymentId: paymentId, updatedAt: new Date() }
     : { refundedCents: transition.refundedCents, paymentStatus: transition.paymentStatus, lastPaymentId: paymentId, customerVisitCounted: transition.fullyRefunded ? false : finance.customerVisitCounted, updatedAt: new Date() }
   updateRecord('orderFinancials', orderId, updates)
+  updateRecord('orders', orderId, { paymentStatus: transition.paymentStatus, updatedAt: new Date() })
   commit('payments', [...demoRecords.payments, payment])
   if (finance.customerId && kind === 'payment' && transition.customerVisitCounted) {
     const customer = demoRecords.customers.find((entry) => entry.id === finance.customerId)
@@ -342,7 +344,7 @@ export async function runDemoOperation(name, payload = {}) {
       }
       const sequence = demoRecords.orders.length + 1
       const orderNumber = `D-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${String(sequence).padStart(3, '0')}`
-      const order = { id, restaurantId: DEMO_RESTAURANT_ID, orderNumber, type: payload.type, tableId: table?.id || null, tableName: table?.name || '', note: payload.note || '', items: items.map(({ itemId, name, quantity, note, selectedVariant, selectedAddOns }) => ({ itemId, name, quantity, note, selectedVariant: selectedVariant?.name || '', selectedAddOns: selectedAddOns.map((option) => option.name) })), status: 'queued', createdBy: demoUser.uid, createdAt: now, updatedAt: now }
+      const order = { id, restaurantId: DEMO_RESTAURANT_ID, orderNumber, type: payload.type, tableId: table?.id || null, tableName: table?.name || '', note: payload.note || '', items: items.map(({ itemId, name, quantity, note, selectedVariant, selectedAddOns }) => ({ itemId, name, quantity, note, selectedVariant: selectedVariant?.name || '', selectedAddOns: selectedAddOns.map((option) => option.name) })), status: 'queued', paymentStatus: 'unpaid', createdBy: demoUser.uid, createdAt: now, updatedAt: now }
       const financial = { id, restaurantId: DEMO_RESTAURANT_ID, orderId: id, customerId: payload.customerId || null, items, subtotalCents, discountCents, taxCents, totalCents: subtotalCents - discountCents + taxCents, paidCents: 0, refundedCents: 0, customerVisitCounted: false, status: 'active', paymentStatus: 'unpaid', createdAt: now, updatedAt: now }
       commit('orders', [order, ...demoRecords.orders])
       commit('orderFinancials', [financial, ...demoRecords.orderFinancials])
@@ -364,7 +366,7 @@ export async function runDemoOperation(name, payload = {}) {
       if (payload.to === 'cancelled' && financialFor(order.id).paidCents > 0) throw new Error('Refund the demo payment before cancelling this order.')
       updateRecord('orders', order.id, { status: payload.to, updatedAt: now, ...(payload.to === 'cancelled' ? { cancellationReason: payload.reason } : {}) })
       if (payload.to === 'cancelled') updateRecord('orderFinancials', order.id, { status: 'cancelled', updatedAt: now })
-      if (order.tableId && (payload.to === 'cancelled' || (payload.to === 'served' && financialFor(order.id).paymentStatus === 'paid'))) updateRecord('tables', order.tableId, { status: 'available', currentOrderId: null })
+      if (order.tableId && (payload.to === 'cancelled' || (payload.to === 'served' && isSettledPaymentStatus(order.paymentStatus)))) updateRecord('tables', order.tableId, { status: 'available', currentOrderId: null })
       recordAudit(`order.${payload.to}`, order.id)
       return { orderId: order.id, status: payload.to, duplicate: false }
     }

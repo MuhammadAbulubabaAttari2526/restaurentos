@@ -30,11 +30,11 @@ describe('trusted payment transitions', () => {
 })
 
 describe('order transition reads', () => {
-  it('loads finance for served transitions when payment status decides whether the table can clear', () => {
+  it('loads finance only when the transition needs it and the role can read it', () => {
     expect(shouldLoadFinancialForTransition('preparing', 'waiter')).toBe(false)
     expect(shouldLoadFinancialForTransition('ready', 'waiter')).toBe(false)
     expect(shouldLoadFinancialForTransition('cancelled', 'waiter')).toBe(true)
-    expect(shouldLoadFinancialForTransition('served', 'waiter')).toBe(true)
+    expect(shouldLoadFinancialForTransition('served', 'waiter')).toBe(false)
     expect(shouldLoadFinancialForTransition('served', 'cashier')).toBe(true)
   })
 })

@@ -60,6 +60,29 @@ describe('isolated sample workspace', () => {
     await expect(runDemoOperation('deleteOrderDraft', { draftId: foreignDraftId })).rejects.toThrow('This draft belongs to another team member.')
   })
 
+  it('mirrors payment status onto demo orders and releases a served paid table', async () => {
+    activateDemoSession()
+    let orders = []
+    let tables = []
+    const unsubscribeOrders = watchDemoRecords('orders', (rows) => { orders = rows })
+    const unsubscribeTables = watchDemoRecords('tables', (rows) => { tables = rows })
+    const created = await runDemoOperation('createOrder', {
+      requestId: 'served-demo-order', type: 'dine-in', tableId: 'table-2',
+      items: [{ itemId: 'lemonade', quantity: 1 }],
+    })
+    await runDemoOperation('recordPayment', {
+      paymentId: 'served-demo-payment', orderId: created.orderId, amountCents: created.totalCents, method: 'cash',
+    })
+    await runDemoOperation('transitionOrder', { orderId: created.orderId, to: 'preparing', requestId: 'served-demo-preparing' })
+    await runDemoOperation('transitionOrder', { orderId: created.orderId, to: 'ready', requestId: 'served-demo-ready' })
+    await runDemoOperation('transitionOrder', { orderId: created.orderId, to: 'served', requestId: 'served-demo-served' })
+
+    expect(orders.find((entry) => entry.id === created.orderId).paymentStatus).toBe('paid')
+    expect(tables.find((entry) => entry.id === 'table-2').status).toBe('available')
+    unsubscribeOrders()
+    unsubscribeTables()
+  })
+
   it('keeps demo order totals populated for display and payments', () => {
     activateDemoSession()
     let records = []

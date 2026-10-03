@@ -91,17 +91,24 @@ service cloud.firestore {
         && data.paymentMethods.hasOnly(['cash', 'card', 'digital']);
     }
 
+    function validOrderPaymentStatus(restaurantId, orderId) {
+      let financePath = /databases/$(database)/documents/restaurants/$(restaurantId)/orderFinancials/$(orderId);
+      return existsAfter(financePath)
+        && request.resource.data.paymentStatus == getAfter(financePath).data.paymentStatus;
+    }
+
     function validOrder(data, restaurantId, orderId) {
       let financePath = /databases/$(database)/documents/restaurants/$(restaurantId)/orderFinancials/$(orderId);
       let safeTableId = data.tableId is string ? data.tableId : '__invalid__';
       let tablePath = /databases/$(database)/documents/restaurants/$(restaurantId)/tables/$(safeTableId);
-      return data.keys().hasOnly(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'note', 'items', 'status', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasAll(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'note', 'items', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+      return data.keys().hasOnly(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasAll(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt'])
         && data.restaurantId == restaurantId
         && data.orderNumber is string
         && data.type in ['dine-in', 'takeaway', 'delivery', 'direct-bill']
         && data.items is list && data.items.size() > 0 && data.items.size() <= 40
         && data.status == 'queued'
+        && data.paymentStatus == 'unpaid'
         && data.createdBy == request.auth.uid
         && data.note is string && data.note.size() <= 500
         && data.createdAt == request.time && data.updatedAt == request.time
@@ -414,13 +421,17 @@ service cloud.firestore {
         allow read: if operationsStaff(restaurantId);
         allow create: if orderStaff(restaurantId) && validOrder(request.resource.data, restaurantId, orderId);
         allow update: if operationsStaff(restaurantId)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancellationReason', 'cancelledBy', 'tableId', 'tableName', 'updatedAt'])
-          && request.resource.data.status in ['queued', 'preparing', 'ready', 'served', 'cancelled']
-          && ((request.resource.data.status == resource.data.status
-              && request.resource.data.diff(resource.data).affectedKeys().hasAny(['tableId', 'tableName']))
-            || (resource.data.status == 'queued' && request.resource.data.status in ['preparing', 'cancelled'])
-            || (resource.data.status == 'preparing' && request.resource.data.status in ['ready', 'cancelled'])
-            || (resource.data.status == 'ready' && request.resource.data.status == 'served'))
+          && ((request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancellationReason', 'cancelledBy', 'tableId', 'tableName', 'updatedAt'])
+              && request.resource.data.status in ['queued', 'preparing', 'ready', 'served', 'cancelled']
+              && ((request.resource.data.status == resource.data.status
+                  && request.resource.data.diff(resource.data).affectedKeys().hasAny(['tableId', 'tableName']))
+                || (resource.data.status == 'queued' && request.resource.data.status in ['preparing', 'cancelled'])
+                || (resource.data.status == 'preparing' && request.resource.data.status in ['ready', 'cancelled'])
+                || (resource.data.status == 'ready' && request.resource.data.status == 'served')))
+            || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paymentStatus', 'updatedAt'])
+              && request.resource.data.diff(resource.data).affectedKeys().hasAny(['paymentStatus'])
+              && request.resource.data.paymentStatus in ['unpaid', 'partially_paid', 'paid', 'partially_refunded', 'refunded']
+              && validOrderPaymentStatus(restaurantId, orderId)))
           && (request.resource.data.status != 'cancelled' || hasPermission(restaurantId, 'voidOrders'));
         allow delete: if false;
       }

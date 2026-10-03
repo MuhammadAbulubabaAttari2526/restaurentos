@@ -120,5 +120,5 @@ export function isSettledPaymentStatus(status) {
 }
 
 export function shouldLoadFinancialForTransition(to, role) {
-  return to === 'cancelled' || (to === 'served' && ['owner', 'manager', 'cashier', 'waiter'].includes(role))
+  return to === 'cancelled' || (to === 'served' && ['owner', 'manager', 'cashier'].includes(role))
 }

@@ -85,7 +85,7 @@ rulesTest('Firestore tenant and role rules', () => {
     const order = {
       restaurantId: 'alpha', orderNumber: 'R-002', type: 'direct-bill', tableId: null, tableName: '', note: '',
       items: [{ itemId: 'soup', name: 'Soup', quantity: 1, note: '', selectedVariant: null, selectedAddOns: [] }],
-      status: 'queued', createdBy: 'cashier-1', createdAt: timestamp, updatedAt: timestamp,
+      status: 'queued', paymentStatus: 'unpaid', createdBy: 'cashier-1', createdAt: timestamp, updatedAt: timestamp,
     }
     const finance = {
       restaurantId: 'alpha', orderId: 'atomic-order', customerId: null,
@@ -100,6 +100,21 @@ rulesTest('Firestore tenant and role rules', () => {
     batch.set(doc(cashier, 'restaurants/alpha/orders/atomic-order'), order)
     batch.set(doc(cashier, 'restaurants/alpha/orderFinancials/atomic-order'), finance)
     await assertSucceeds(batch.commit())
+
+    const orderRef = doc(cashier, 'restaurants/alpha/orders/atomic-order')
+    const financeRef = doc(cashier, 'restaurants/alpha/orderFinancials/atomic-order')
+    await assertFails(updateDoc(orderRef, { paymentStatus: 'paid', updatedAt: serverTimestamp() }))
+    const paymentBatch = writeBatch(cashier)
+    paymentBatch.set(doc(cashier, 'restaurants/alpha/payments/atomic-payment'), {
+      restaurantId: 'alpha', orderId: 'atomic-order', amountCents: 900, method: 'cash', reference: '',
+      kind: 'payment', recordedBy: 'cashier-1', createdAt: serverTimestamp(),
+    })
+    paymentBatch.update(financeRef, {
+      paidCents: 900, paymentStatus: 'paid', customerVisitCounted: true,
+      lastPaymentId: 'atomic-payment', updatedAt: serverTimestamp(),
+    })
+    paymentBatch.update(orderRef, { paymentStatus: 'paid', updatedAt: serverTimestamp() })
+    await assertSucceeds(paymentBatch.commit())
   })
 
   it('requires every stock quantity change to match a manager movement record', async () => {
