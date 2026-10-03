@@ -261,7 +261,13 @@ function applyDemoPayment(orderId, paymentId, amountCents, kind, values = {}) {
     ? { ...transition, customerVisitCounted: transition.customerVisitCounted || finance.customerVisitCounted, lastPaymentId: paymentId, updatedAt: new Date() }
     : { refundedCents: transition.refundedCents, paymentStatus: transition.paymentStatus, lastPaymentId: paymentId, customerVisitCounted: transition.fullyRefunded ? false : finance.customerVisitCounted, updatedAt: new Date() }
   updateRecord('orderFinancials', orderId, updates)
-  updateRecord('orders', orderId, { paymentStatus: transition.paymentStatus, updatedAt: new Date() })
+  const order = demoRecords.orders.find((entry) => entry.id === orderId)
+  if (order) {
+    updateRecord('orders', orderId, { paymentStatus: transition.paymentStatus, updatedAt: new Date() })
+    if (order.status === 'served' && order.tableId && isSettledPaymentStatus(transition.paymentStatus)) {
+      updateRecord('tables', order.tableId, { status: 'available', currentOrderId: null, updatedAt: new Date() })
+    }
+  }
   commit('payments', [...demoRecords.payments, payment])
   if (finance.customerId && kind === 'payment' && transition.customerVisitCounted) {
     const customer = demoRecords.customers.find((entry) => entry.id === finance.customerId)

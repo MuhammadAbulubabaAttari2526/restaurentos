@@ -121,6 +121,60 @@ describe('isolated sample workspace', () => {
     unsubscribeMovements()
   })
 
+  it('releases demo tables for all settled payment states, including payment after serving', async () => {
+    activateDemoSession()
+    let tables = []
+    let orders = []
+    const unsubscribeTables = watchDemoRecords('tables', (rows) => { tables = rows })
+    const unsubscribeOrders = watchDemoRecords('orders', (rows) => { orders = rows })
+    const cases = [
+      { tableId: 'table-2', status: 'paid', refundCents: 0 },
+      { tableId: 'table-3', status: 'partially_refunded', refundCents: 100 },
+      { tableId: 'patio-1', status: 'refunded', refundCents: null },
+    ]
+
+    for (const [index, scenario] of cases.entries()) {
+      const orderId = `settled-demo-order-${index}`
+      const paymentId = `settled-demo-payment-${index}`
+      const created = await runDemoOperation('createOrder', {
+        requestId: orderId, type: 'dine-in', tableId: scenario.tableId,
+        items: [{ itemId: 'lemonade', quantity: 1 }],
+      })
+      await runDemoOperation('recordPayment', {
+        paymentId, orderId, amountCents: created.totalCents, method: 'cash',
+      })
+      if (scenario.status !== 'paid') {
+        await runDemoOperation('recordRefund', {
+          refundId: `settled-demo-refund-${index}`, orderId,
+          amountCents: scenario.refundCents ?? created.totalCents, reason: 'Settlement status test',
+        })
+      }
+      for (const [transitionIndex, to] of ['preparing', 'ready', 'served'].entries()) {
+        await runDemoOperation('transitionOrder', {
+          orderId, requestId: `${orderId}-transition-${transitionIndex}`, to,
+        })
+      }
+      expect(orders.find((entry) => entry.id === orderId).paymentStatus).toBe(scenario.status)
+      expect(tables.find((entry) => entry.id === scenario.tableId).status).toBe('available')
+    }
+
+    const afterServe = await runDemoOperation('createOrder', {
+      requestId: 'settled-demo-order-after-serve', type: 'dine-in', tableId: 'table-2',
+      items: [{ itemId: 'lemonade', quantity: 1 }],
+    })
+    await runDemoOperation('transitionOrder', { orderId: afterServe.orderId, requestId: 'after-serve-preparing', to: 'preparing' })
+    await runDemoOperation('transitionOrder', { orderId: afterServe.orderId, requestId: 'after-serve-ready', to: 'ready' })
+    await runDemoOperation('transitionOrder', { orderId: afterServe.orderId, requestId: 'after-serve-served', to: 'served' })
+    await runDemoOperation('recordPayment', {
+      paymentId: 'after-serve-payment', orderId: afterServe.orderId,
+      amountCents: afterServe.totalCents, method: 'cash',
+    })
+
+    expect(tables.find((entry) => entry.id === 'table-2').status).toBe('available')
+    unsubscribeTables()
+    unsubscribeOrders()
+  })
+
   it('keeps demo order totals populated for display and payments', () => {
     activateDemoSession()
     let records = []
