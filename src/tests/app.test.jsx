@@ -1,11 +1,11 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../App.jsx'
 import { AuthProvider } from '../context/AuthContext.jsx'
-import { createStableIntentId } from '../utils/idUtils.js'
 import { mergeOrderWithFinancials } from '../utils/orderMerge.js'
 import { activateDemoSession, clearDemoSession, runDemoOperation, saveDemoRecord } from '../services/demoData.js'
+import * as dataOperations from '../services/data.js'
 import { readPosDraft, writePosDraft } from '../utils/posDraftStorage.js'
 
 afterEach(() => {
@@ -13,6 +13,7 @@ afterEach(() => {
   clearDemoSession()
   window.localStorage.clear()
   window.sessionStorage.clear()
+  vi.restoreAllMocks()
 })
 
 function renderApp(path) {
@@ -144,12 +145,79 @@ describe('authentication routes', () => {
     })
   })
 
-  it('reuses the same stable ID for a single user intent until the action succeeds', () => {
-    const first = createStableIntentId('order')
-    const second = createStableIntentId('order')
+  it('reuses an order requestId on retry and creates a fresh one after success', async () => {
+    activateDemoSession()
+    const createOrder = vi.spyOn(dataOperations, 'createOrder')
+      .mockRejectedValueOnce(new Error('Temporary network failure'))
+      .mockImplementation(async ({ requestId }) => ({
+        orderId: requestId, orderNumber: 'R-RETRY', subtotalCents: 32000,
+        discountCents: 0, taxCents: 0, totalCents: 32000,
+      }))
+    renderApp('/pos')
 
-    expect(first).toBe(second)
-    expect(first).toMatch(/^[a-zA-Z0-9_-]+$/)
+    fireEvent.click(await screen.findByRole('button', { name: /mint lemonade/i }))
+    fireEvent.click(screen.getByRole('button', { name: /create order/i }))
+    await waitFor(() => expect(createOrder).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: /create order/i }))
+    await waitFor(() => expect(createOrder).toHaveBeenCalledTimes(2))
+    const firstRequestId = createOrder.mock.calls[0][0].requestId
+    expect(createOrder.mock.calls[1][0].requestId).toBe(firstRequestId)
+
+    fireEvent.click(await screen.findByRole('button', { name: /close receipt/i }))
+    fireEvent.click(screen.getByRole('button', { name: /mint lemonade/i }))
+    fireEvent.click(screen.getByRole('button', { name: /create order/i }))
+    await waitFor(() => expect(createOrder).toHaveBeenCalledTimes(3))
+    expect(createOrder.mock.calls[2][0].requestId).not.toBe(firstRequestId)
+  })
+
+  it('reuses a paymentId on retry and creates a fresh one after success', async () => {
+    activateDemoSession()
+    const recordPayment = vi.spyOn(dataOperations, 'recordPayment')
+      .mockRejectedValueOnce(new Error('Temporary network failure'))
+      .mockResolvedValue({ paymentId: 'payment-saved' })
+    renderApp('/orders')
+
+    const orderRow = (await screen.findByText('R-20261001-0011')).closest('tr')
+    fireEvent.click(within(orderRow).getByRole('button', { name: /unpaid/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Record payment' }))
+    await waitFor(() => expect(recordPayment).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Record payment' }))
+    await waitFor(() => expect(recordPayment).toHaveBeenCalledTimes(2))
+    const firstPaymentId = recordPayment.mock.calls[0][0].paymentId
+    expect(recordPayment.mock.calls[1][0].paymentId).toBe(firstPaymentId)
+
+    fireEvent.click(within(orderRow).getByRole('button', { name: /unpaid/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Record payment' }))
+    await waitFor(() => expect(recordPayment).toHaveBeenCalledTimes(3))
+    expect(recordPayment.mock.calls[2][0].paymentId).not.toBe(firstPaymentId)
+  })
+
+  it('reuses a refundId on retry and creates a fresh one after success', async () => {
+    activateDemoSession()
+    const recordRefund = vi.spyOn(dataOperations, 'recordRefund')
+      .mockRejectedValueOnce(new Error('Temporary network failure'))
+      .mockResolvedValue({ refundId: 'refund-saved' })
+    renderApp('/orders')
+    fireEvent.click(await screen.findByRole('button', { name: /filter orders/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'All orders' }))
+
+    const orderRow = (await screen.findByText('R-20261001-0010')).closest('tr')
+    fireEvent.click(within(orderRow).getByRole('button', { name: /^paid$/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Refund' }))
+    fireEvent.change(screen.getByLabelText('Refund reason'), { target: { value: 'Retry test' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Record refund' }))
+    await waitFor(() => expect(recordRefund).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Record refund' }))
+    await waitFor(() => expect(recordRefund).toHaveBeenCalledTimes(2))
+    const firstRefundId = recordRefund.mock.calls[0][0].refundId
+    expect(recordRefund.mock.calls[1][0].refundId).toBe(firstRefundId)
+
+    fireEvent.click(within(orderRow).getByRole('button', { name: /^paid$/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Refund' }))
+    fireEvent.change(screen.getByLabelText('Refund reason'), { target: { value: 'Retry test again' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Record refund' }))
+    await waitFor(() => expect(recordRefund).toHaveBeenCalledTimes(3))
+    expect(recordRefund.mock.calls[2][0].refundId).not.toBe(firstRefundId)
   })
 
   it('persists POS drafts in local storage for reload recovery', () => {
