@@ -347,7 +347,14 @@ export async function runDemoOperation(name, payload = {}) {
       const settings = demoRecords.settings[0]
       const taxCents = Math.round((subtotalCents - discountCents) * settings.taxRate)
       const table = payload.tableId ? demoRecords.tables.find((entry) => entry.id === payload.tableId) : null
-      if (payload.type === 'dine-in' && (!table || table.status !== 'available')) throw new Error('Select an available demo table.')
+      const reservation = table?.currentReservationId
+        ? demoRecords.reservations.find((entry) => entry.id === table.currentReservationId)
+        : null
+      const tableIsAvailable = table?.status === 'available'
+      const tableLinkedToSeatedReservation = table?.status === 'occupied'
+        && reservation?.status === 'seated'
+        && reservation.tableId === table.id
+      if (payload.type === 'dine-in' && (!table || (!tableIsAvailable && !tableLinkedToSeatedReservation))) throw new Error('Select an available demo table or a seated reservation table.')
       if (!['dine-in', 'takeaway', 'delivery', 'direct-bill'].includes(payload.type)) throw new Error('Choose dine-in, takeaway, delivery, or direct bill.')
       const needs = calculateRecipeNeeds(payload.items, menu)
       for (const [ingredientId, quantity] of needs) {
@@ -360,7 +367,7 @@ export async function runDemoOperation(name, payload = {}) {
       const financial = { id, restaurantId: DEMO_RESTAURANT_ID, orderId: id, customerId: payload.customerId || null, items, subtotalCents, discountCents, taxCents, totalCents: subtotalCents - discountCents + taxCents, paidCents: 0, refundedCents: 0, customerVisitCounted: false, status: 'active', paymentStatus: 'unpaid', createdAt: now, updatedAt: now }
       commit('orders', [order, ...demoRecords.orders])
       commit('orderFinancials', [financial, ...demoRecords.orderFinancials])
-      if (table) updateRecord('tables', table.id, { status: 'occupied', currentOrderId: id })
+      if (table) updateRecord('tables', table.id, { status: 'occupied', currentOrderId: id, currentReservationId: null })
       for (const [ingredientId, quantity] of needs) {
         const stock = demoRecords.inventory.find((entry) => entry.id === ingredientId)
         const movementId = `${id}_${ingredientId}`
@@ -432,9 +439,11 @@ export async function runDemoOperation(name, payload = {}) {
     case 'createReservation': {
       if (demoRecords.reservations.some((entry) => entry.id === payload.reservationId)) return { reservationId: payload.reservationId, duplicate: true }
       const table = demoRecords.tables.find((entry) => entry.id === payload.tableId)
-      if (!table || table.status !== 'available') throw new Error('That demo table is not available.')
       const startsAt = new Date(payload.startsAtMillis)
       const endsAt = new Date(startsAt.getTime() + Number(payload.durationMinutes) * 60000)
+      const tableIsAvailable = table?.status === 'available'
+      const occupiedTableBookedForFuture = table?.status === 'occupied' && startsAt.getTime() > now.getTime()
+      if (!table || (!tableIsAvailable && !occupiedTableBookedForFuture)) throw new Error('That demo table is not available for this reservation time.')
       if (demoRecords.reservations.some((entry) => entry.tableId === table.id && entry.status === 'booked' && entry.startsAt < endsAt && entry.endsAt > startsAt)) throw new Error('That demo table already has a reservation at this time.')
       const reservation = { id: payload.reservationId || makeId('reservation'), restaurantId: DEMO_RESTAURANT_ID, tableId: table.id, tableName: table.name, guestName: payload.guestName, phone: payload.phone || '', covers: Number(payload.covers), startsAt, endsAt, status: 'booked', createdBy: demoUser.uid, createdAt: now }
       commit('reservations', [reservation, ...demoRecords.reservations])
@@ -445,6 +454,11 @@ export async function runDemoOperation(name, payload = {}) {
     case 'cancelReservation': {
       const reservation = demoRecords.reservations.find((entry) => entry.id === payload.reservationId)
       if (!reservation || reservation.status !== 'booked') throw new Error('This demo reservation is no longer active.')
+      if (name === 'seatReservation') {
+        const table = demoRecords.tables.find((entry) => entry.id === reservation.tableId)
+        if (!table || table.status !== 'available') throw new Error('This demo table is currently in use.')
+        updateRecord('tables', table.id, { status: 'occupied', currentOrderId: null, currentReservationId: reservation.id, updatedAt: now })
+      }
       updateRecord('reservations', reservation.id, { status: name === 'seatReservation' ? 'seated' : 'cancelled', updatedAt: now })
       recordAudit(`reservation.${name === 'seatReservation' ? 'seated' : 'cancelled'}`, reservation.id)
       return { reservationId: reservation.id, status: name === 'seatReservation' ? 'seated' : 'cancelled' }

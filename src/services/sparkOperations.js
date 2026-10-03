@@ -101,8 +101,18 @@ async function createOrder(data) {
     const tableSnapshot = tableRef ? snapshots[offset++] : null
     const customerSnapshot = customerRef ? snapshots[offset++] : null
     const menuSnapshots = snapshots.slice(offset)
+    const seatedReservationId = tableSnapshot?.data()?.currentReservationId
+    const seatedReservation = seatedReservationId
+      ? await transaction.get(path(actor.restaurantId, 'reservations', seatedReservationId))
+      : null
     if (!settingsSnapshot.exists()) fail('Restaurant settings have not been configured.')
-    if (tableRef && (!tableSnapshot.exists() || tableSnapshot.data().status !== 'available')) fail('That table is occupied or unavailable.')
+    const tableAvailable = tableSnapshot?.data()?.status === 'available'
+    const tableLinkedToSeatedReservation = tableSnapshot?.data()?.status === 'occupied'
+      && Boolean(seatedReservationId)
+      && seatedReservation?.exists()
+      && seatedReservation.data().status === 'seated'
+      && seatedReservation.data().tableId === tableId
+    if (tableRef && (!tableSnapshot.exists() || (!tableAvailable && !tableLinkedToSeatedReservation))) fail('That table is occupied or unavailable.')
     if (customerRef && !customerSnapshot.exists()) fail('That customer record could not be found.')
 
     const menuById = new Map(menuRefs.map((ref, index) => [itemIds[index], menuSnapshots[index].data()]))
@@ -206,7 +216,7 @@ async function createOrder(data) {
         createdAt: serverTimestamp(),
       })
     }
-    if (tableRef) transaction.update(tableRef, { status: 'occupied', currentOrderId: requestId, updatedAt: serverTimestamp() })
+    if (tableRef) transaction.update(tableRef, { status: 'occupied', currentOrderId: requestId, currentReservationId: null, updatedAt: serverTimestamp() })
     createAudit(transaction, actor, 'order.created', requestId)
     return {
       orderId: requestId,
@@ -553,7 +563,11 @@ async function createReservation(data) {
   return runTransaction(db, async (transaction) => {
     const [existing, table] = await Promise.all([transaction.get(reservationRef), transaction.get(tableRef)])
     if (existing.exists()) return { reservationId, duplicate: true }
-    if (!table.exists() || table.data().status !== 'available') fail('That table is not available for reservation.')
+    const tableIsAvailable = table.exists() && table.data().status === 'available'
+    const occupiedTableBookedForFuture = table.exists()
+      && table.data().status === 'occupied'
+      && startsAtMillis > Date.now()
+    if (!tableIsAvailable && !occupiedTableBookedForFuture) fail('That table is not available for reservation.')
     if (covers > Number(table.data().capacity || 0)) fail('Guest count exceeds this table’s seating capacity.')
     // getDocs is not part of the transaction; this narrows the race window but does not eliminate it.
     const overlap = await getDocs(query(
@@ -598,6 +612,7 @@ async function seatReservation(data) {
     if (!table.exists() || table.data().status !== 'available') fail('This table is currently in use.')
     if (reservation.data().startsAt.toMillis() > Date.now() + 15 * 60000) fail('Seat this reservation within 15 minutes of its start time.')
     transaction.update(reservationRef, { status: 'seated', seatedBy: actor.uid, seatedAt: serverTimestamp(), updatedAt: serverTimestamp() })
+    transaction.update(tableRef, { status: 'occupied', currentOrderId: null, currentReservationId: reservationId, updatedAt: serverTimestamp() })
     createAudit(transaction, actor, 'reservation.seated', reservationId, { tableId: reservation.data().tableId })
     return { reservationId, tableId: reservation.data().tableId, duplicate: false }
   })

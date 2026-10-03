@@ -186,6 +186,58 @@ describe('Spark order draft persistence', () => {
       startsAtMillis: Date.now() + 86400000, durationMinutes: 90,
     })).rejects.toThrow('That table already has a reservation during this time.')
   })
+
+  it('marks the table occupied and links it when seating a reservation', async () => {
+    const startsAt = { toMillis: () => Date.now() - 60000 }
+    mocks.records.set('restaurants/restaurant-1/reservations/reservation-1', {
+      status: 'booked', tableId: 'table-1', startsAt,
+    })
+    mocks.records.set('restaurants/restaurant-1/tables/table-1', { status: 'available', capacity: 4 })
+
+    await runSparkOperation('seatReservation', { reservationId: 'reservation-1' })
+
+    expect(mocks.records.get('restaurants/restaurant-1/reservations/reservation-1').status).toBe('seated')
+    expect(mocks.records.get('restaurants/restaurant-1/tables/table-1')).toMatchObject({
+      status: 'occupied', currentOrderId: null, currentReservationId: 'reservation-1',
+    })
+  })
+
+  it('allows a future reservation on an occupied table when times do not overlap', async () => {
+    mocks.records.set('restaurants/restaurant-1/tables/table-1', {
+      name: 'Table 1', capacity: 4, status: 'occupied', currentOrderId: 'active-order',
+    })
+    mocks.getDocs.mockResolvedValue({ empty: true, docs: [] })
+
+    const result = await runSparkOperation('createReservation', {
+      reservationId: 'future-reservation', tableId: 'table-1', guestName: 'Future guest', covers: 2,
+      startsAtMillis: Date.now() + 86400000, durationMinutes: 90,
+    })
+
+    expect(result).toMatchObject({ reservationId: 'future-reservation', duplicate: false })
+    expect(mocks.records.get('restaurants/restaurant-1/reservations/future-reservation').status).toBe('booked')
+  })
+
+  it('lets the next POS order consume a seated reservation table link', async () => {
+    mocks.records.set('restaurants/restaurant-1/settings/profile', { taxRate: 0, paymentMethods: ['cash'] })
+    mocks.records.set('restaurants/restaurant-1/menuItems/menu-1', { name: 'Soup', priceCents: 500, available: true })
+    mocks.records.set('restaurants/restaurant-1/tables/table-1', {
+      name: 'Table 1', status: 'occupied', currentOrderId: null, currentReservationId: 'reservation-1',
+    })
+    mocks.records.set('restaurants/restaurant-1/reservations/reservation-1', {
+      status: 'seated', tableId: 'table-1',
+    })
+    mocks.getDocs.mockResolvedValue({ empty: true, docs: [] })
+
+    const result = await runSparkOperation('createOrder', {
+      requestId: 'reservation-pos-order', type: 'dine-in', tableId: 'table-1',
+      items: [{ itemId: 'menu-1', quantity: 1 }],
+    })
+
+    expect(result).toMatchObject({ orderId: 'reservation-pos-order', duplicate: false })
+    expect(mocks.records.get('restaurants/restaurant-1/tables/table-1')).toMatchObject({
+      status: 'occupied', currentOrderId: 'reservation-pos-order', currentReservationId: null,
+    })
+  })
 })
 
 function snapshotFor(path) {

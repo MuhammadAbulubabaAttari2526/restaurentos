@@ -42,6 +42,59 @@ rulesTest('Firestore tenant and role rules', () => {
     await assertFails(getDoc(doc(user('waiter-1', 'waiter'), 'restaurants/beta/menuItems/soup')))
   })
 
+  it('allows future bookings on occupied tables and links seated reservations to the next order', async () => {
+    const waiter = user('waiter-1', 'waiter')
+    const now = Date.now()
+    const startsAt = new Date(now - 60000)
+    const endsAt = new Date(now + 3600000)
+    await environment.withSecurityRulesDisabled(async (context) => {
+      const database = context.firestore()
+      await setDoc(doc(database, 'restaurants/alpha/tables/seat-table'), {
+        name: 'Seat table', capacity: 4, status: 'available', currentOrderId: null,
+      })
+      await setDoc(doc(database, 'restaurants/alpha/tables/future-table'), {
+        name: 'Future table', capacity: 4, status: 'occupied', currentOrderId: 'active-order',
+      })
+      await setDoc(doc(database, 'restaurants/alpha/reservations/seat-reservation'), {
+        restaurantId: 'alpha', tableId: 'seat-table', tableName: 'Seat table', guestName: 'Guest',
+        phone: '', covers: 2, startsAt, endsAt, status: 'booked', createdBy: 'waiter-1',
+        createdAt: startsAt, updatedAt: startsAt,
+      })
+    })
+
+    const reservationRef = doc(waiter, 'restaurants/alpha/reservations/seat-reservation')
+    const tableRef = doc(waiter, 'restaurants/alpha/tables/seat-table')
+    const seatBatch = writeBatch(waiter)
+    seatBatch.update(reservationRef, { status: 'seated', seatedBy: 'waiter-1', seatedAt: serverTimestamp(), updatedAt: serverTimestamp() })
+    seatBatch.update(tableRef, { status: 'occupied', currentOrderId: null, currentReservationId: 'seat-reservation', updatedAt: serverTimestamp() })
+    await assertSucceeds(seatBatch.commit())
+
+    const timestamp = serverTimestamp()
+    const order = {
+      restaurantId: 'alpha', orderNumber: 'R-SEATED', type: 'dine-in', tableId: 'seat-table', tableName: 'Seat table', note: '',
+      items: [{ itemId: 'soup', name: 'Soup', quantity: 1, note: '', selectedVariant: null, selectedAddOns: [] }],
+      status: 'queued', paymentStatus: 'unpaid', createdBy: 'waiter-1', createdAt: timestamp, updatedAt: timestamp,
+    }
+    const finance = {
+      restaurantId: 'alpha', orderId: 'seated-order', customerId: null,
+      items: [{ itemId: 'soup', name: 'Soup', quantity: 1, unitPriceCents: 900 }],
+      subtotalCents: 900, discountCents: 0, taxCents: 0, totalCents: 900,
+      paidCents: 0, refundedCents: 0, customerVisitCounted: false,
+      status: 'active', paymentStatus: 'unpaid', createdAt: timestamp, updatedAt: timestamp,
+    }
+    const orderBatch = writeBatch(waiter)
+    orderBatch.set(doc(waiter, 'restaurants/alpha/orders/seated-order'), order)
+    orderBatch.set(doc(waiter, 'restaurants/alpha/orderFinancials/seated-order'), finance)
+    orderBatch.update(tableRef, { currentOrderId: 'seated-order', currentReservationId: null, updatedAt: serverTimestamp() })
+    await assertSucceeds(orderBatch.commit())
+
+    await assertSucceeds(setDoc(doc(waiter, 'restaurants/alpha/reservations/future-reservation'), {
+      restaurantId: 'alpha', tableId: 'future-table', tableName: 'Future table', guestName: 'Later guest',
+      phone: '', covers: 2, startsAt: new Date(Date.now() + 86400000), endsAt: new Date(Date.now() + 90000000),
+      status: 'booked', createdBy: 'waiter-1', createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }))
+  })
+
   it('does not allow a public account to create an owner membership or restaurant', async () => {
     const browser = environment.authenticatedContext('self-owner', {
       restaurantId: 'alpha', role: 'owner', email_verified: true, email: 'owner@example.test',

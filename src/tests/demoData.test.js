@@ -190,6 +190,18 @@ describe('isolated sample workspace', () => {
     unsubscribe()
   })
 
+  it('allows a future demo reservation on an occupied table', async () => {
+    activateDemoSession()
+
+    const result = await runDemoOperation('createReservation', {
+      reservationId: 'future-occupied-table-reservation', tableId: 'table-1',
+      guestName: 'Future guest', covers: 2, startsAtMillis: Date.now() + 86400000,
+      durationMinutes: 90,
+    })
+
+    expect(result).toMatchObject({ reservationId: 'future-occupied-table-reservation', duplicate: false })
+  })
+
   it('keeps demo order totals populated for display and payments', () => {
     activateDemoSession()
     let records = []

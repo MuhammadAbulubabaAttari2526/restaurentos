@@ -125,6 +125,21 @@ describe('authentication routes', () => {
     expect(await screen.findByText('Showing latest 50 draft orders.')).toBeInTheDocument()
   })
 
+  it('excludes past booked reservations from Upcoming count and labels them no-show', async () => {
+    activateDemoSession()
+    saveDemoRecord('reservations', {
+      tableId: 'table-3', tableName: 'Table 3', guestName: 'Past guest', covers: 2,
+      startsAt: new Date(Date.now() - 3 * 3600000), endsAt: new Date(Date.now() - 2 * 3600000),
+      status: 'booked', createdBy: 'demo-owner',
+    }, null)
+    renderApp('/tables')
+
+    const upcoming = screen.getByText('Upcoming reservations').closest('.reservation-panel')
+    const pastRow = screen.getByText('Past guest').closest('tr')
+    expect(within(pastRow).getByText('no-show')).toBeInTheDocument()
+    expect(upcoming.querySelector('.count-badge')).toHaveTextContent('1')
+  })
+
   it('shows a warning when an exported report is truncated', async () => {
     activateDemoSession()
     vi.spyOn(dataOperations, 'exportReport').mockResolvedValue({

@@ -101,6 +101,8 @@ service cloud.firestore {
       let financePath = /databases/$(database)/documents/restaurants/$(restaurantId)/orderFinancials/$(orderId);
       let safeTableId = data.tableId is string ? data.tableId : '__invalid__';
       let tablePath = /databases/$(database)/documents/restaurants/$(restaurantId)/tables/$(safeTableId);
+      let reservationId = exists(tablePath) ? get(tablePath).data.get('currentReservationId', '') : '';
+      let reservationPath = /databases/$(database)/documents/restaurants/$(restaurantId)/reservations/$(reservationId);
       return data.keys().hasOnly(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt'])
         && data.keys().hasAll(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt'])
         && data.restaurantId == restaurantId
@@ -119,9 +121,15 @@ service cloud.firestore {
         && ((data.type == 'dine-in'
             && data.tableId is string && data.tableId.size() > 0
             && exists(tablePath) && existsAfter(tablePath)
-            && get(tablePath).data.status == 'available'
+            && ((get(tablePath).data.status == 'available')
+              || (get(tablePath).data.status == 'occupied'
+                && reservationId is string && reservationId.size() > 0
+                && exists(reservationPath)
+                && get(reservationPath).data.status == 'seated'
+                && get(reservationPath).data.tableId == data.tableId))
             && getAfter(tablePath).data.status == 'occupied'
             && getAfter(tablePath).data.currentOrderId == orderId
+            && getAfter(tablePath).data.get('currentReservationId', null) == null
             && getAfter(tablePath).data.name == data.tableName)
           || (data.type in ['takeaway', 'delivery', 'direct-bill']
             && data.tableId == null && data.tableName == ''));
@@ -329,6 +337,16 @@ service cloud.firestore {
         && getAfter(receiptPath).data.createdAt == request.time;
     }
 
+    function validReservationSeat(restaurantId, tableId, reservationId) {
+      let reservationPath = /databases/$(database)/documents/restaurants/$(restaurantId)/reservations/$(reservationId);
+      return exists(reservationPath)
+        && get(reservationPath).data.status == 'booked'
+        && get(reservationPath).data.tableId == tableId
+        && existsAfter(reservationPath)
+        && getAfter(reservationPath).data.status == 'seated'
+        && getAfter(reservationPath).data.seatedBy == request.auth.uid;
+    }
+
     match /accountMemberships/{userId} {
       allow get: if signedIn() && request.auth.uid == userId;
       allow list: if false;
@@ -500,7 +518,7 @@ service cloud.firestore {
           && request.resource.data.currentOrderId == null;
         allow update: if (
             manager(restaurantId)
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'capacity', 'status', 'currentOrderId', 'updatedAt', 'mergedInto', 'mergedTableIds', 'mergedTableNames', 'unmergedCapacity'])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'capacity', 'status', 'currentOrderId', 'currentReservationId', 'updatedAt', 'mergedInto', 'mergedTableIds', 'mergedTableNames', 'unmergedCapacity'])
             && request.resource.data.name is string
             && request.resource.data.capacity is int
             && request.resource.data.capacity > 0
@@ -510,9 +528,16 @@ service cloud.firestore {
               || (request.resource.data.status == 'merged' && request.resource.data.mergedInto is string))
           ) || (
             orderStaff(restaurantId)
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'currentOrderId', 'updatedAt'])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'currentOrderId', 'currentReservationId', 'updatedAt'])
             && ((request.resource.data.status == 'available' && request.resource.data.currentOrderId == null)
-              || (request.resource.data.status == 'occupied' && request.resource.data.currentOrderId is string))
+              || (request.resource.data.status == 'occupied' && request.resource.data.currentOrderId is string && request.resource.data.get('currentReservationId', null) == null))
+          ) || (
+            orderStaff(restaurantId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'currentOrderId', 'currentReservationId', 'updatedAt'])
+            && request.resource.data.status == 'occupied'
+            && request.resource.data.currentOrderId == null
+            && request.resource.data.currentReservationId is string
+            && validReservationSeat(restaurantId, tableId, request.resource.data.currentReservationId)
           );
         allow delete: if manager(restaurantId)
           && resource.data.status == 'available'
@@ -530,7 +555,9 @@ service cloud.firestore {
           && request.resource.data.covers is int && request.resource.data.covers > 0
           && request.resource.data.status == 'booked'
           && request.resource.data.endsAt > request.resource.data.startsAt
-          && get(/databases/$(database)/documents/restaurants/$(restaurantId)/tables/$(request.resource.data.tableId)).data.status == 'available'
+          && (get(/databases/$(database)/documents/restaurants/$(restaurantId)/tables/$(request.resource.data.tableId)).data.status == 'available'
+            || (get(/databases/$(database)/documents/restaurants/$(restaurantId)/tables/$(request.resource.data.tableId)).data.status == 'occupied'
+              && request.resource.data.startsAt > request.time))
           && request.resource.data.covers <= get(/databases/$(database)/documents/restaurants/$(restaurantId)/tables/$(request.resource.data.tableId)).data.capacity
           && request.resource.data.createdBy == request.auth.uid;
         allow update: if orderStaff(restaurantId)
