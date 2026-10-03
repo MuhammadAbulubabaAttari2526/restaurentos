@@ -5,7 +5,7 @@ import App from '../App.jsx'
 import { AuthProvider } from '../context/AuthContext.jsx'
 import { createStableIntentId } from '../utils/idUtils.js'
 import { mergeOrderWithFinancials } from '../utils/orderMerge.js'
-import { activateDemoSession, clearDemoSession, saveDemoRecord } from '../services/demoData.js'
+import { activateDemoSession, clearDemoSession, runDemoOperation, saveDemoRecord } from '../services/demoData.js'
 import { readPosDraft, writePosDraft } from '../utils/posDraftStorage.js'
 
 afterEach(() => {
@@ -75,6 +75,19 @@ describe('authentication routes', () => {
     renderApp('/staff')
 
     expect(await screen.findByRole('button', { name: /delete/i })).toBeInTheDocument()
+  })
+
+  it('hides removed staff and lets the owner re-enable disabled staff', async () => {
+    activateDemoSession()
+    await runDemoOperation('setStaffActive', { userId: 'demo-cashier', active: false })
+    await runDemoOperation('deleteStaffMember', { userId: 'demo-waiter' })
+    renderApp('/staff')
+
+    expect(await screen.findByText('Bilal Shah')).toBeInTheDocument()
+    expect(screen.queryByText('Mariam Iqbal')).not.toBeInTheDocument()
+    const disabledRow = screen.getByText('Bilal Shah').closest('tr')
+    fireEvent.click(within(disabledRow).getByRole('button', { name: /enable access/i }))
+    expect(await within(disabledRow).findByText('Active')).toBeInTheDocument()
   })
 
   it('saves a new menu item as available when the availability field is untouched', async () => {

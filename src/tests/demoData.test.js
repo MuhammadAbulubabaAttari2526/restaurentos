@@ -60,6 +60,18 @@ describe('isolated sample workspace', () => {
     await expect(runDemoOperation('deleteOrderDraft', { draftId: foreignDraftId })).rejects.toThrow('This draft belongs to another team member.')
   })
 
+  it('soft-removes demo staff while keeping the record inactive', async () => {
+    activateDemoSession()
+    await runDemoOperation('deleteStaffMember', { userId: 'demo-cashier' })
+    let staff = []
+    const unsubscribe = watchDemoRecords('users', (rows) => { staff = rows })
+    const removed = staff.find((entry) => entry.id === 'demo-cashier')
+
+    expect(removed.active).toBe(false)
+    expect(removed.removedAt).toBeInstanceOf(Date)
+    unsubscribe()
+  })
+
   it('mirrors payment status onto demo orders and releases a served paid table', async () => {
     activateDemoSession()
     let orders = []

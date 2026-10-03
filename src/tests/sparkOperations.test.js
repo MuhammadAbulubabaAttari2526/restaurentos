@@ -33,6 +33,7 @@ describe('Spark order draft persistence', () => {
       ['restaurants/restaurant-1/menuItems/menu-1', { available: true, priceCents: 500 }],
     ])
     mocks.denyFinanceReads = false
+    mocks.currentUser.uid = 'owner-1'
     mocks.currentUser.getIdTokenResult.mockResolvedValue({ claims: { restaurantId: 'restaurant-1', role: 'owner' } })
     mocks.getDoc.mockImplementation(async (reference) => snapshotFor(reference.path))
     mocks.serverTimestamp.mockImplementation(() => ({ timestamp: Symbol('server timestamp') }))
@@ -96,6 +97,17 @@ describe('Spark order draft persistence', () => {
 
     expect(result).toMatchObject({ orderId: 'order-1', status: 'served', duplicate: false })
     expect(mocks.records.get('restaurants/restaurant-1/orders/order-1').status).toBe('served')
+  })
+
+  it('soft-removes a staff member without deleting their membership', async () => {
+    mocks.records.set('restaurants/restaurant-1/users/staff-1', { role: 'cashier', active: true })
+    mocks.records.set('accountMemberships/staff-1', { restaurantId: 'restaurant-1', role: 'cashier', active: true })
+
+    await runSparkOperation('deleteStaffMember', { userId: 'staff-1' })
+
+    expect(mocks.records.get('restaurants/restaurant-1/users/staff-1')).toMatchObject({ active: false })
+    expect(mocks.records.get('restaurants/restaurant-1/users/staff-1').removedAt).toBeDefined()
+    expect(mocks.records.get('accountMemberships/staff-1').active).toBe(true)
   })
 })
 

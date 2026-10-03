@@ -353,11 +353,13 @@ service cloud.firestore {
           && validStaffJoin(restaurantId, userId, request.resource.data.invitationId, request.resource.data.role);
         allow update: if role(restaurantId, ['owner'])
           && resource.data.role != 'owner'
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active', 'updatedAt', 'permissions'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active', 'updatedAt', 'permissions', 'removedAt'])
           && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['active']) || request.resource.data.active is bool)
           && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['permissions'])
             || ((resource.data.role == 'cashier' && request.resource.data.permissions.hasOnly(['discounts', 'refunds', 'voidOrders']))
               || (resource.data.role == 'waiter' && request.resource.data.permissions.hasOnly(['discounts', 'voidOrders']))))
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['removedAt'])
+            || (!request.resource.data.active && request.resource.data.removedAt == request.time))
           && (!request.resource.data.keys().hasAny(['updatedAt']) || request.resource.data.updatedAt == request.time);
         allow delete: if false;
       }

@@ -63,6 +63,17 @@ rulesTest('Firestore tenant and role rules', () => {
     await assertFails(getDocs(collection(user('waiter-1', 'waiter'), 'restaurants/alpha/kitchenTickets')))
   })
 
+  it('allows owners to soft-remove non-owner staff and prevents removing the owner', async () => {
+    const owner = user('owner-1', 'owner')
+    const waiterRef = doc(owner, 'restaurants/alpha/users/waiter-1')
+    await assertSucceeds(updateDoc(waiterRef, {
+      active: false, removedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }))
+    await assertFails(updateDoc(doc(owner, 'restaurants/alpha/users/owner-1'), {
+      active: false, removedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }))
+  })
+
   it('allows cashier reads and blocks browser writes to orders and payments', async () => {
     const cashier = user('cashier-1', 'cashier')
     await assertSucceeds(getDoc(doc(cashier, 'restaurants/alpha/orderFinancials/order-1')))

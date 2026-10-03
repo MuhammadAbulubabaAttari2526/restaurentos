@@ -446,14 +446,14 @@ export async function runDemoOperation(name, payload = {}) {
       return { invitationId, inviteUrl: `${window.location.origin}/join/${DEMO_RESTAURANT_ID}/${invitationId}` }
     }
     case 'setStaffActive':
-      updateRecord('users', payload.userId, { active: Boolean(payload.active) })
+      updateRecord('users', payload.userId, { active: Boolean(payload.active), updatedAt: now })
       recordAudit(payload.active ? 'staff.access_enabled' : 'staff.access_disabled', payload.userId)
       return { userId: payload.userId, active: payload.active }
     case 'deleteStaffMember': {
       const member = demoRecords.users.find((entry) => entry.id === payload.userId)
       if (!member) throw new Error('Team member not found.')
       if (member.role === 'owner') throw new Error('The owner account cannot be removed here.')
-      demoRecords.users = demoRecords.users.filter((entry) => entry.id !== payload.userId)
+      updateRecord('users', payload.userId, { active: false, removedAt: now, updatedAt: now })
       recordAudit('staff.member_deleted', payload.userId)
       return { userId: payload.userId, deleted: true }
     }

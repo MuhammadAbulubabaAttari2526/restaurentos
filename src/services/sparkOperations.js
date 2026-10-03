@@ -855,12 +855,10 @@ async function deleteStaffMember(data) {
   const actor = await actorFor(['owner'])
   const userId = safeId(data.userId, 'Team member')
   const memberRef = path(actor.restaurantId, 'users', userId)
-  const accountRef = doc(db, 'accountMemberships', userId)
   return runTransaction(db, async (transaction) => {
     const member = await transaction.get(memberRef)
     if (!member.exists() || member.data().role === 'owner') fail('That team member cannot be removed here.')
-    transaction.delete(memberRef)
-    transaction.delete(accountRef)
+    transaction.update(memberRef, { active: false, removedAt: serverTimestamp(), updatedAt: serverTimestamp() })
     createAudit(transaction, actor, 'staff.member_deleted', userId)
     return { userId, deleted: true }
   })
