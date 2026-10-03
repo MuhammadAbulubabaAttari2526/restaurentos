@@ -356,6 +356,9 @@ export async function runDemoOperation(name, payload = {}) {
         && reservation.tableId === table.id
       if (payload.type === 'dine-in' && (!table || (!tableIsAvailable && !tableLinkedToSeatedReservation))) throw new Error('Select an available demo table or a seated reservation table.')
       if (!['dine-in', 'takeaway', 'delivery', 'direct-bill'].includes(payload.type)) throw new Error('Choose dine-in, takeaway, delivery, or direct bill.')
+      const covers = payload.type === 'dine-in' ? Number(payload.covers ?? 1) : null
+      if (payload.type === 'dine-in' && (!Number.isInteger(covers) || covers < 1 || covers > 40)) throw new Error('Guest count must be between 1 and 40.')
+      if (payload.type === 'dine-in' && covers > Number(table.capacity || 0)) throw new Error('Guest count exceeds this table’s seating capacity.')
       const needs = calculateRecipeNeeds(payload.items, menu)
       for (const [ingredientId, quantity] of needs) {
         const stock = demoRecords.inventory.find((entry) => entry.id === ingredientId)
@@ -363,7 +366,7 @@ export async function runDemoOperation(name, payload = {}) {
       }
       const sequence = demoRecords.orders.length + 1
       const orderNumber = `D-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${String(sequence).padStart(3, '0')}`
-      const order = { id, restaurantId: DEMO_RESTAURANT_ID, orderNumber, type: payload.type, tableId: table?.id || null, tableName: table?.name || '', note: payload.note || '', items: items.map(({ itemId, name, quantity, note, selectedVariant, selectedAddOns }) => ({ itemId, name, quantity, note, selectedVariant: selectedVariant?.name || '', selectedAddOns: selectedAddOns.map((option) => option.name) })), status: 'queued', paymentStatus: 'unpaid', createdBy: demoUser.uid, createdAt: now, updatedAt: now }
+      const order = { id, restaurantId: DEMO_RESTAURANT_ID, orderNumber, type: payload.type, tableId: table?.id || null, tableName: table?.name || '', ...(payload.type === 'dine-in' ? { covers } : {}), note: payload.note || '', items: items.map(({ itemId, name, quantity, note, selectedVariant, selectedAddOns }) => ({ itemId, name, quantity, note, selectedVariant: selectedVariant?.name || '', selectedAddOns: selectedAddOns.map((option) => option.name) })), status: 'queued', paymentStatus: 'unpaid', createdBy: demoUser.uid, createdAt: now, updatedAt: now }
       const financial = { id, restaurantId: DEMO_RESTAURANT_ID, orderId: id, customerId: payload.customerId || null, items, subtotalCents, discountCents, taxCents, totalCents: subtotalCents - discountCents + taxCents, paidCents: 0, refundedCents: 0, customerVisitCounted: false, status: 'active', paymentStatus: 'unpaid', createdAt: now, updatedAt: now }
       commit('orders', [order, ...demoRecords.orders])
       commit('orderFinancials', [financial, ...demoRecords.orderFinancials])
@@ -565,7 +568,7 @@ export async function runDemoOperation(name, payload = {}) {
       if (!order || !target) throw new Error('Choose an order and target table from the sample workspace.')
       if (order.type !== 'dine-in' || !order.tableId || ['served', 'cancelled'].includes(order.status)) throw new Error('Only active dine-in orders can move to another table.')
       if (order.tableId === target.id) return { orderId: order.id, targetTableId: target.id, duplicate: true }
-      if (target.status !== 'available' || (order.items || []).reduce((sum, item) => sum + item.quantity, 0) > Number(target.capacity || 0)) throw new Error('The target demo table is occupied or too small.')
+      if (target.status !== 'available' || (Number.isInteger(order.covers) && order.covers > Number(target.capacity || 0))) throw new Error('The target demo table is occupied or too small.')
       if (demoRecords.reservations.some((entry) => entry.tableId === target.id && entry.status === 'booked' && entry.startsAt <= now && entry.endsAt > now)) throw new Error('The target demo table is reserved right now.')
       const old = demoRecords.tables.find((entry) => entry.id === order.tableId)
       if (!old || old.currentOrderId !== order.id) throw new Error('The original demo table no longer has this order.')

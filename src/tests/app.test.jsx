@@ -140,6 +140,41 @@ describe('authentication routes', () => {
     expect(upcoming.querySelector('.count-badge')).toHaveTextContent('1')
   })
 
+  it('defaults dine-in guests to one and submits the chosen cover count', async () => {
+    activateDemoSession()
+    const createOrder = vi.spyOn(dataOperations, 'createOrder').mockResolvedValue({
+      orderId: 'covers-order', orderNumber: 'R-COVERS', subtotalCents: 32000,
+      discountCents: 0, taxCents: 0, totalCents: 32000,
+    })
+    renderApp({ pathname: '/pos', state: { tableId: 'table-2' } })
+
+    const guests = await screen.findByLabelText('Guests')
+    expect(guests).toHaveValue(1)
+    expect(guests).toHaveAttribute('min', '1')
+    expect(guests).toHaveAttribute('max', '40')
+    fireEvent.change(guests, { target: { value: '3' } })
+    fireEvent.click(screen.getByRole('button', { name: /mint lemonade/i }))
+    fireEvent.click(screen.getByRole('button', { name: /create order/i }))
+
+    await waitFor(() => expect(createOrder).toHaveBeenCalled())
+    expect(createOrder.mock.calls[0][0]).toMatchObject({ type: 'dine-in', tableId: 'table-2', covers: 3 })
+  })
+
+  it('filters transfer tables by covers instead of item quantity', async () => {
+    activateDemoSession()
+    saveDemoRecord('tables', { capacity: 3 }, 'table-3')
+    const created = await runDemoOperation('createOrder', {
+      requestId: 'transfer-covers-ui', type: 'dine-in', tableId: 'table-2', covers: 2,
+      items: [{ itemId: 'lemonade', quantity: 4 }],
+    })
+    renderApp('/orders')
+
+    const orderRow = (await screen.findByText(created.orderNumber)).closest('tr')
+    fireEvent.click(within(orderRow).getByRole('button', { name: /transfer table/i }))
+
+    expect(await screen.findByRole('option', { name: /table 3 · 3 seats/i })).toBeInTheDocument()
+  })
+
   it('shows a warning when an exported report is truncated', async () => {
     activateDemoSession()
     vi.spyOn(dataOperations, 'exportReport').mockResolvedValue({

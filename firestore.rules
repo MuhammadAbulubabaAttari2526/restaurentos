@@ -103,11 +103,13 @@ service cloud.firestore {
       let tablePath = /databases/$(database)/documents/restaurants/$(restaurantId)/tables/$(safeTableId);
       let reservationId = exists(tablePath) ? get(tablePath).data.get('currentReservationId', '') : '';
       let reservationPath = /databases/$(database)/documents/restaurants/$(restaurantId)/reservations/$(reservationId);
-      return data.keys().hasOnly(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt'])
+      return data.keys().hasOnly(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'covers', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt'])
         && data.keys().hasAll(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt'])
         && data.restaurantId == restaurantId
         && data.orderNumber is string
         && data.type in ['dine-in', 'takeaway', 'delivery', 'direct-bill']
+        && ((data.type == 'dine-in' && data.covers is int && data.covers >= 1 && data.covers <= 40)
+          || (data.type != 'dine-in' && !data.keys().hasAny(['covers'])))
         && data.items is list && data.items.size() > 0 && data.items.size() <= 40
         && data.status == 'queued'
         && data.paymentStatus == 'unpaid'

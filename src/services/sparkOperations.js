@@ -71,6 +71,8 @@ async function createOrder(data) {
   const actor = await actorFor(['owner', 'manager', 'cashier', 'waiter'], { loadMember: Number(data.discountCents || 0) > 0 })
   const requestId = safeId(data.requestId, 'Request ID')
   const type = ['dine-in', 'takeaway', 'delivery', 'direct-bill'].includes(data.type) ? data.type : fail('Choose dine-in, takeaway, delivery, or direct bill.')
+  const covers = type === 'dine-in' ? Number(data.covers ?? 1) : null
+  if (type === 'dine-in' && (!Number.isInteger(covers) || covers < 1 || covers > 40)) fail('Guest count must be between 1 and 40.')
   if (!Array.isArray(data.items) || data.items.length < 1 || data.items.length > 40) fail('An order must contain 1 to 40 menu lines.')
   const quantities = new Map()
   for (const line of data.items) {
@@ -113,6 +115,7 @@ async function createOrder(data) {
       && seatedReservation.data().status === 'seated'
       && seatedReservation.data().tableId === tableId
     if (tableRef && (!tableSnapshot.exists() || (!tableAvailable && !tableLinkedToSeatedReservation))) fail('That table is occupied or unavailable.')
+    if (tableRef && covers > Number(tableSnapshot.data().capacity || 0)) fail('Guest count exceeds this table’s seating capacity.')
     if (customerRef && !customerSnapshot.exists()) fail('That customer record could not be found.')
 
     const menuById = new Map(menuRefs.map((ref, index) => [itemIds[index], menuSnapshots[index].data()]))
@@ -153,6 +156,7 @@ async function createOrder(data) {
       type,
       tableId,
       tableName,
+      ...(type === 'dine-in' ? { covers } : {}),
       note,
       items: lines.map(({ itemId, name, quantity, note: itemNote, selectedVariant, selectedAddOns }) => ({
         itemId, name, quantity, note: itemNote, selectedVariant,
@@ -726,8 +730,8 @@ async function transferOrderTable(data) {
     const [oldTable, targetTable] = await Promise.all([transaction.get(oldRef), transaction.get(targetRef)])
     if (!oldTable.exists() || oldTable.data().currentOrderId !== orderId) fail('The original table is no longer assigned to this order.')
     if (!targetTable.exists() || targetTable.data().status !== 'available') fail('The target table is occupied or reserved right now.')
-    const covers = (current.items || []).reduce((sum, item) => sum + item.quantity, 0)
-    if (covers > Number(targetTable.data().capacity || 0)) fail('The target table does not have enough seats for this order.')
+    const covers = Number(current.covers)
+    if (Number.isInteger(covers) && covers > Number(targetTable.data().capacity || 0)) fail('The target table does not have enough seats for this order.')
     const now = new Date()
     // getDocs is not part of the transaction; this narrows the race window but does not eliminate it.
     const reservations = await getDocs(query(

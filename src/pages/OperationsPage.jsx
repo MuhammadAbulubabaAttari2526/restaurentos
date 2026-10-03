@@ -156,6 +156,7 @@ function PosPage() {
   const [selectedMenuId, setSelectedMenuId] = useState('')
   const [orderType, setOrderType] = useState(() => (location.state?.tableId ? 'dine-in' : 'direct-bill'))
   const [tableId, setTableId] = useState(() => location.state?.tableId || '')
+  const [covers, setCovers] = useState(1)
   const [customerId, setCustomerId] = useState('')
   const [note, setNote] = useState('')
   const [discount, setDiscount] = useState('')
@@ -177,6 +178,7 @@ function PosPage() {
       setCart(savedDraft.cart || [])
       setOrderType(savedDraft.orderType || (location.state?.tableId ? 'dine-in' : 'direct-bill'))
       setTableId(savedDraft.tableId || location.state?.tableId || '')
+      setCovers(Number(savedDraft.covers) || 1)
       setCustomerId(canSeeCustomers ? savedDraft.customerId || '' : '')
       setNote(savedDraft.note || '')
       setDiscount(canDiscount ? savedDraft.discount || '' : '')
@@ -194,8 +196,8 @@ function PosPage() {
 
   useEffect(() => {
     if (!draftStorageKey) return
-    writePosDraft(draftStorageKey, { cart, orderType, tableId, customerId, note, discount, activeDraftId })
-  }, [draftStorageKey, cart, orderType, tableId, customerId, note, discount, activeDraftId])
+    writePosDraft(draftStorageKey, { cart, orderType, tableId, covers, customerId, note, discount, activeDraftId })
+  }, [draftStorageKey, cart, orderType, tableId, covers, customerId, note, discount, activeDraftId])
 
   function addHighlightedItem() {
     const item = highlightedItem
@@ -287,6 +289,7 @@ function PosPage() {
         requestId: requestId,
         type: orderType,
         tableId: orderType === 'dine-in' ? tableId || null : null,
+        ...(orderType === 'dine-in' ? { covers: Number(covers) } : {}),
         customerId: canSeeCustomers ? customerId || null : null,
         discountCents,
         note: note.trim().slice(0, 500),
@@ -299,7 +302,7 @@ function PosPage() {
           toast.error(`Order created, but the saved draft could not be removed. ${friendlyError(error)}`)
         })
       }
-      writePosDraft(draftStorageKey, { cart: [], orderType: 'direct-bill', tableId: '', customerId: '', note: '', discount: '', activeDraftId: null })
+      writePosDraft(draftStorageKey, { cart: [], orderType: 'direct-bill', tableId: '', covers: 1, customerId: '', note: '', discount: '', activeDraftId: null })
       toast.success('Order created.')
       const tableName = tables.find((table) => table.id === tableId)?.name || ''
       setReceipt({
@@ -337,6 +340,7 @@ function PosPage() {
       setNote('')
       setDiscount('')
       setTableId('')
+      setCovers(1)
       setCustomerId('')
       setOrderType('direct-bill')
       setActiveDraftId(null)
@@ -357,6 +361,7 @@ function PosPage() {
       <div className="cart-lines">{cart.length ? cart.map((line) => <div className="cart-line" key={line.lineId}><div className="cart-line-details"><strong>{line.name}</strong><span>{line.optionLabel ? `${line.optionLabel} · ` : ''}{money(line.unitPriceCents)} each</span><details className="cart-line-note" open={Boolean(line.note)}><summary>{line.note ? 'Edit item note' : 'Add item note'}</summary><input className="cart-item-note" aria-label={`Note for ${line.name}`} placeholder="Special request" maxLength={300} value={line.note} onChange={(event) => updateLineNote(line.lineId, event.target.value)} /></details></div><div className="quantity-control"><button aria-label={`Remove one ${line.name}`} onClick={() => changeQty(line.lineId, -1)}><Minus size={14} /></button><span>{line.quantity}</span><button aria-label={`Add one ${line.name}`} onClick={() => changeQty(line.lineId, 1)}><Plus size={14} /></button></div><strong>{money(line.unitPriceCents * line.quantity)}</strong></div>) : <div className="cart-empty">Choose a menu item to get started.</div>}</div>
       <details className="cart-disclosure order-extras" open={Boolean(note || discount)}><summary>Order details <span>{note || discount ? 'Added' : 'Optional'}</span></summary><div className="order-extras-fields"><label className="compact-label order-note-label">Order note <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Allergies, guest requests…" maxLength={500} /></label>
       {canDiscount && <label className="compact-label discount-field">Discount amount<input aria-label="Discount amount" type="number" min="0" step="0.01" max={(subtotalCents / 100).toFixed(2)} value={discount} onChange={(event) => setDiscount(event.target.value)} placeholder="0.00" /></label>}</div></details>
+      {orderType === 'dine-in' && <label className="compact-label">Guests<input aria-label="Guests" type="number" min="1" max="40" step="1" required value={covers} onChange={(event) => setCovers(event.target.value)} /></label>}
       <div className="cart-totals"><div><span>Subtotal</span><span>{money(totals.subtotalCents)}</span></div>{totals.discountCents > 0 && <div><span>Discount</span><span>−{money(totals.discountCents)}</span></div>}<div><span>Tax</span><span>{money(totals.taxCents)}</span></div><div className="cart-grand-total"><strong>Total</strong><strong>{money(totals.totalCents)}</strong></div></div>
       <button className="button button-primary send-order" onClick={submitOrder} disabled={busy || !cart.length}>{busy ? 'Saving order…' : 'Create order'}<ArrowUpRight size={17} /></button><p className="cart-security-note">Prices and tax are recalculated from the current menu before saving.</p>
     </aside></div>{optionItem && <MenuOptionsDialog item={optionItem} onCancel={() => setOptionItem(null)} onAdd={(variantId, addOnIds) => { addToCart(optionItem, variantId, addOnIds); setOptionItem(null) }} />}{receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} onClose={() => setReceipt(null)} />}</div>
@@ -565,7 +570,7 @@ function TransferTableDialog({ order, onClose, onTransferred }) {
       onTransferred()
     } catch (problem) { toast.error(friendlyError(problem)) } finally { setBusy(false) }
   }
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="transfer-title"><div className="modal-heading"><div><p className="eyebrow">{order.orderNumber}</p><h2 id="transfer-title">Transfer table</h2></div><button className="icon-button" aria-label="Close" onClick={onClose}>×</button></div>{error && <div className="inline-alert">{error}</div>}<LimitNotices sources={[{ truncated, limit, label: 'tables' }]} /><form className="modal-form" onSubmit={submit}><label>Available table<select required value={targetTableId} onChange={(event) => setTargetTableId(event.target.value)}><option value="">{loading ? 'Loading tables…' : 'Choose a table'}</option>{tables.filter((table) => table.id !== order.tableId && table.status === 'available' && Number(table.capacity) >= order.items.reduce((sum, item) => sum + item.quantity, 0)).map((table) => <option key={table.id} value={table.id}>{table.name} · {table.capacity} seats</option>)}</select></label><p className="form-helper">The transfer is rechecked against the live floor and reservation schedule before saving.</p><div className="modal-actions"><button type="button" className="button button-subtle" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={busy || loading}>{busy ? 'Transferring…' : 'Transfer order'}</button></div></form></section></div>
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="transfer-title"><div className="modal-heading"><div><p className="eyebrow">{order.orderNumber}</p><h2 id="transfer-title">Transfer table</h2></div><button className="icon-button" aria-label="Close" onClick={onClose}>×</button></div>{error && <div className="inline-alert">{error}</div>}<LimitNotices sources={[{ truncated, limit, label: 'tables' }]} /><form className="modal-form" onSubmit={submit}><label>Available table<select required value={targetTableId} onChange={(event) => setTargetTableId(event.target.value)}><option value="">{loading ? 'Loading tables…' : 'Choose a table'}</option>{tables.filter((table) => table.id !== order.tableId && table.status === 'available' && transferTableFitsCovers(table, order)).map((table) => <option key={table.id} value={table.id}>{table.name} · {table.capacity} seats</option>)}</select></label><p className="form-helper">The transfer is rechecked against the live floor and reservation schedule before saving.</p><div className="modal-actions"><button type="button" className="button button-subtle" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={busy || loading}>{busy ? 'Transferring…' : 'Transfer order'}</button></div></form></section></div>
 }
 
 function formatDate(timestamp) {
@@ -580,6 +585,10 @@ function reservationHasEnded(reservation) {
 
 function displayedReservationStatus(reservation) {
   return reservation.status === 'booked' && reservationHasEnded(reservation) ? 'no-show' : reservation.status
+}
+
+function transferTableFitsCovers(table, order) {
+  return !Number.isInteger(order.covers) || order.covers <= Number(table.capacity || 0)
 }
 
 function localDateKey(value) {

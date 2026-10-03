@@ -221,7 +221,7 @@ describe('Spark order draft persistence', () => {
     mocks.records.set('restaurants/restaurant-1/settings/profile', { taxRate: 0, paymentMethods: ['cash'] })
     mocks.records.set('restaurants/restaurant-1/menuItems/menu-1', { name: 'Soup', priceCents: 500, available: true })
     mocks.records.set('restaurants/restaurant-1/tables/table-1', {
-      name: 'Table 1', status: 'occupied', currentOrderId: null, currentReservationId: 'reservation-1',
+      name: 'Table 1', capacity: 4, status: 'occupied', currentOrderId: null, currentReservationId: 'reservation-1',
     })
     mocks.records.set('restaurants/restaurant-1/reservations/reservation-1', {
       status: 'seated', tableId: 'table-1',
@@ -237,6 +237,49 @@ describe('Spark order draft persistence', () => {
     expect(mocks.records.get('restaurants/restaurant-1/tables/table-1')).toMatchObject({
       status: 'occupied', currentOrderId: 'reservation-pos-order', currentReservationId: null,
     })
+  })
+
+  it('stores the dine-in cover count on a newly created order', async () => {
+    mocks.records.set('restaurants/restaurant-1/settings/profile', { taxRate: 0, paymentMethods: ['cash'] })
+    mocks.records.set('restaurants/restaurant-1/menuItems/menu-1', { name: 'Soup', priceCents: 500, available: true })
+    mocks.records.set('restaurants/restaurant-1/tables/table-1', { name: 'Table 1', capacity: 4, status: 'available' })
+    mocks.getDocs.mockResolvedValue({ empty: true, docs: [] })
+
+    await runSparkOperation('createOrder', {
+      requestId: 'covers-order', type: 'dine-in', tableId: 'table-1', covers: 3,
+      items: [{ itemId: 'menu-1', quantity: 1 }],
+    })
+
+    expect(mocks.records.get('restaurants/restaurant-1/orders/covers-order').covers).toBe(3)
+  })
+
+  it('uses covers instead of item count when transferring a table', async () => {
+    mocks.records.set('restaurants/restaurant-1/orders/transfer-order', {
+      status: 'ready', type: 'dine-in', tableId: 'old-table', covers: 2,
+      items: [{ itemId: 'menu-1', quantity: 4 }],
+    })
+    mocks.records.set('restaurants/restaurant-1/tables/old-table', { status: 'occupied', currentOrderId: 'transfer-order' })
+    mocks.records.set('restaurants/restaurant-1/tables/target-table', { name: 'Target', status: 'available', capacity: 3 })
+    mocks.getDocs.mockResolvedValue({ empty: true, docs: [] })
+
+    const result = await runSparkOperation('transferOrderTable', { orderId: 'transfer-order', targetTableId: 'target-table' })
+
+    expect(result).toMatchObject({ targetTableId: 'target-table', duplicate: false })
+    expect(mocks.records.get('restaurants/restaurant-1/orders/transfer-order').tableId).toBe('target-table')
+  })
+
+  it('skips transfer capacity checks for legacy orders without covers', async () => {
+    mocks.records.set('restaurants/restaurant-1/orders/legacy-transfer-order', {
+      status: 'ready', type: 'dine-in', tableId: 'old-table',
+      items: [{ itemId: 'menu-1', quantity: 4 }],
+    })
+    mocks.records.set('restaurants/restaurant-1/tables/old-table', { status: 'occupied', currentOrderId: 'legacy-transfer-order' })
+    mocks.records.set('restaurants/restaurant-1/tables/target-table', { name: 'Target', status: 'available', capacity: 1 })
+    mocks.getDocs.mockResolvedValue({ empty: true, docs: [] })
+
+    const result = await runSparkOperation('transferOrderTable', { orderId: 'legacy-transfer-order', targetTableId: 'target-table' })
+
+    expect(result).toMatchObject({ targetTableId: 'target-table', duplicate: false })
   })
 })
 

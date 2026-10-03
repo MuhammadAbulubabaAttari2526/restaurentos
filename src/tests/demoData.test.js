@@ -202,6 +202,41 @@ describe('isolated sample workspace', () => {
     expect(result).toMatchObject({ reservationId: 'future-occupied-table-reservation', duplicate: false })
   })
 
+  it('stores demo covers and uses them for transfer capacity, skipping legacy orders', async () => {
+    activateDemoSession()
+    const created = await runDemoOperation('createOrder', {
+      requestId: 'demo-covers-transfer', type: 'dine-in', tableId: 'table-2', covers: 2,
+      items: [{ itemId: 'lemonade', quantity: 4 }],
+    })
+    let orders = []
+    const unsubscribe = watchDemoRecords('orders', (rows) => { orders = rows })
+    expect(orders.find((entry) => entry.id === created.orderId).covers).toBe(2)
+    const targetTableId = saveDemoRecord('tables', {
+      name: 'Covers target', capacity: 3, status: 'available', currentOrderId: null,
+    }, null)
+
+    await expect(runDemoOperation('transferOrderTable', {
+      orderId: created.orderId, targetTableId,
+    })).resolves.toMatchObject({ duplicate: false, targetTableId })
+
+    const legacyTableId = saveDemoRecord('tables', {
+      name: 'Legacy source', capacity: 4, status: 'occupied', currentOrderId: null,
+    }, null)
+    const legacyTargetId = saveDemoRecord('tables', {
+      name: 'Legacy target', capacity: 1, status: 'available', currentOrderId: null,
+    }, null)
+    const legacyOrderId = saveDemoRecord('orders', {
+      type: 'dine-in', tableId: legacyTableId, status: 'ready',
+      items: [{ itemId: 'lemonade', quantity: 4 }],
+    }, null)
+    saveDemoRecord('tables', { currentOrderId: legacyOrderId }, legacyTableId)
+
+    await expect(runDemoOperation('transferOrderTable', {
+      orderId: legacyOrderId, targetTableId: legacyTargetId,
+    })).resolves.toMatchObject({ duplicate: false, targetTableId: legacyTargetId })
+    unsubscribe()
+  })
+
   it('keeps demo order totals populated for display and payments', () => {
     activateDemoSession()
     let records = []

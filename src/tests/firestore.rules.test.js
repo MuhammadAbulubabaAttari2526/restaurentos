@@ -71,7 +71,7 @@ rulesTest('Firestore tenant and role rules', () => {
 
     const timestamp = serverTimestamp()
     const order = {
-      restaurantId: 'alpha', orderNumber: 'R-SEATED', type: 'dine-in', tableId: 'seat-table', tableName: 'Seat table', note: '',
+      restaurantId: 'alpha', orderNumber: 'R-SEATED', type: 'dine-in', tableId: 'seat-table', tableName: 'Seat table', covers: 2, note: '',
       items: [{ itemId: 'soup', name: 'Soup', quantity: 1, note: '', selectedVariant: null, selectedAddOns: [] }],
       status: 'queued', paymentStatus: 'unpaid', createdBy: 'waiter-1', createdAt: timestamp, updatedAt: timestamp,
     }
