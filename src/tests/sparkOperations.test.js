@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   currentUser: { uid: 'owner-1', getIdTokenResult: vi.fn() },
   denyFinanceReads: false,
+  getDocs: vi.fn(),
   getDoc: vi.fn(),
   records: new Map(),
   runTransaction: vi.fn(),
@@ -18,9 +19,14 @@ vi.mock('firebase/firestore', async (importOriginal) => {
       doc: (databaseOrCollection, ...segments) => ({
         path: segments.length ? segments.join('/') : `${databaseOrCollection.path}/generated`,
       }),
+    getDocs: mocks.getDocs,
     getDoc: mocks.getDoc,
+    limit: (count) => ({ type: 'limit', count }),
+    orderBy: (field, direction) => ({ type: 'orderBy', field, direction }),
+    query: (reference, ...constraints) => ({ collectionPath: reference.path, constraints }),
     runTransaction: mocks.runTransaction,
     serverTimestamp: mocks.serverTimestamp,
+    where: (field, operation, value) => ({ type: 'where', field, operation, value }),
   }
 })
 
@@ -34,6 +40,8 @@ describe('Spark order draft persistence', () => {
     ])
     mocks.denyFinanceReads = false
     mocks.currentUser.uid = 'owner-1'
+    mocks.getDocs.mockReset()
+    mocks.getDocs.mockResolvedValue({ docs: [] })
     mocks.currentUser.getIdTokenResult.mockResolvedValue({ claims: { restaurantId: 'restaurant-1', role: 'owner' } })
     mocks.getDoc.mockImplementation(async (reference) => snapshotFor(reference.path))
     mocks.serverTimestamp.mockImplementation(() => ({ timestamp: Symbol('server timestamp') }))
@@ -148,6 +156,25 @@ describe('Spark order draft persistence', () => {
 
     expect(mocks.records.get('restaurants/restaurant-1/orderFinancials/legacy-category-order').items[0])
       .toMatchObject({ itemId: 'legacy-menu', categoryId: 'soups', categoryName: 'Soup & starters' })
+  })
+
+  it('marks a report truncated when a mocked query returns exactly its cap', async () => {
+    const now = new Date()
+    mocks.getDocs.mockImplementation(async ({ collectionPath }) => {
+      const count = collectionPath.endsWith('/orderFinancials') ? 1000
+        : collectionPath.endsWith('/expenses') ? 1000
+          : 2000
+      const row = collectionPath.endsWith('/orderFinancials')
+        ? { status: 'active', createdAt: now, items: [], subtotalCents: 0, taxCents: 0, refundedCents: 0, discountCents: 0 }
+        : collectionPath.endsWith('/expenses')
+          ? { status: 'pending', date: '2026-10-01', amountCents: 0 }
+          : { kind: 'payment', method: 'cash', amountCents: 1, createdAt: now }
+      return { docs: Array.from({ length: count }, () => ({ data: () => row })) }
+    })
+
+    const report = await runSparkOperation('exportReport', { range: 'week' })
+
+    expect(report.truncated).toBe(true)
   })
 })
 

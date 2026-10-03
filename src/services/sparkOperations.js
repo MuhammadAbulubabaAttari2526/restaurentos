@@ -936,6 +936,9 @@ async function exportReport(data) {
     getDocs(query(rows(actor.restaurantId, 'expenses'), where('date', '>=', startKey), orderBy('date'), limit(1000))),
     getDocs(query(rows(actor.restaurantId, 'payments'), where('createdAt', '>=', start), orderBy('createdAt', 'desc'), limit(2000))),
   ])
+  const truncated = financialSnapshot.docs.length === 1000
+    || expensesSnapshot.docs.length === 1000
+    || paymentsSnapshot.docs.length === 2000
   const totalsByDay = new Map()
   const salesByItem = new Map()
   const salesByCategory = new Map()
@@ -987,6 +990,7 @@ async function exportReport(data) {
   }
   return {
     range: rangeName,
+    truncated,
     summary: { grossSalesCents, refundsCents, discountsCents, expenseCents },
     rows: [...totalsByDay.values()].sort((a, b) => a.date.localeCompare(b.date)),
     itemRows: [...salesByItem.values()].sort((a, b) => b.grossSalesCents - a.grossSalesCents),

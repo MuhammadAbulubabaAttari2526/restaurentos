@@ -320,6 +320,7 @@ function reportFor(range = 'week') {
   }
   return {
     range,
+    truncated: false,
     summary: { grossSalesCents, refundsCents, discountsCents, expenseCents },
     rows: financials.map((entry) => ({ date: new Date(entry.createdAt).toISOString().slice(0, 10), orderCount: 1, grossSalesCents: entry.subtotalCents, taxCents: entry.taxCents, refundsCents: entry.refundedCents })),
     itemRows: [...salesByItem.values()].sort((left, right) => right.grossSalesCents - left.grossSalesCents),

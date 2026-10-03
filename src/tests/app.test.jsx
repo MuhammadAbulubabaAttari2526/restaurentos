@@ -115,6 +115,30 @@ describe('authentication routes', () => {
     expect(within(drafts).queryByRole('option', { name: /delivery/i })).not.toBeInTheDocument()
   })
 
+  it('shows a latest-N notice when the POS draft list reaches its limit', async () => {
+    activateDemoSession()
+    for (let index = 0; index < 50; index += 1) {
+      saveDemoRecord('draftOrders', { createdBy: 'demo-owner', type: 'takeaway' }, null)
+    }
+    renderApp('/pos')
+
+    expect(await screen.findByText('Showing latest 50 draft orders.')).toBeInTheDocument()
+  })
+
+  it('shows a warning when an exported report is truncated', async () => {
+    activateDemoSession()
+    vi.spyOn(dataOperations, 'exportReport').mockResolvedValue({
+      range: 'week', truncated: true,
+      summary: { grossSalesCents: 0, refundsCents: 0, discountsCents: 0, expenseCents: 0 },
+      rows: [], itemRows: [], categoryRows: [], paymentRows: [], expenseRows: [],
+    })
+    renderApp('/reports')
+
+    fireEvent.click((await screen.findAllByRole('button', { name: /run report/i }))[0])
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/report reached a result limit/i)
+  })
+
   it('prints the saved dine-in receipt with one variant, both add-ons and saved totals', async () => {
     activateDemoSession()
     saveDemoRecord('menuItems', {
