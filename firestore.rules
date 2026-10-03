@@ -241,6 +241,12 @@ service cloud.firestore {
             && orderId is string && !exists(orderPath) && existsAfter(orderPath)
             && getAfter(orderPath).data.status == 'queued'
             && getAfter(orderPath).data.createdBy == data.createdBy)
+          || (data.movementType == 'order_cancel_restock'
+            && orderStaff(restaurantId)
+            && data.quantity is number && data.quantity > 0
+            && orderId is string && exists(orderPath) && get(orderPath).data.status in ['queued', 'preparing']
+            && existsAfter(orderPath) && getAfter(orderPath).data.status == 'cancelled'
+            && (manager(restaurantId) || hasPermission(restaurantId, 'voidOrders')))
           || (data.movementType == 'purchase_received'
             && manager(restaurantId)
             && data.quantity is number && data.quantity > 0
@@ -272,6 +278,8 @@ service cloud.firestore {
         && getAfter(movementPath).data.createdAt == request.time
         && movementChangesStockBy(getAfter(movementPath).data, movementId, restaurantId)
         && validMovementIntent(getAfter(movementPath).data, restaurantId)
+        && (getAfter(movementPath).data.movementType != 'order_cancel_restock'
+          || getAfter(movementPath).data.quantity > 0)
         && (getAfter(movementPath).data.movementType == 'purchase_received'
           ? request.resource.data.averageCostCents is int && request.resource.data.averageCostCents >= 0
           : request.resource.data.get('averageCostCents', 0) == resource.data.get('averageCostCents', 0));
@@ -284,7 +292,7 @@ service cloud.firestore {
       return data.restaurantId == restaurantId
         && data.createdBy == request.auth.uid
         && data.createdAt == request.time
-        && ((data.movementType in ['receive', 'waste', 'adjust', 'order_consumption', 'purchase_received']
+        && ((data.movementType in ['receive', 'waste', 'adjust', 'order_consumption', 'order_cancel_restock', 'purchase_received']
             && data.keys().hasOnly(['restaurantId', 'ingredientId', 'itemName', 'unit', 'movementType', 'quantity', 'reason', 'orderId', 'unitCostCents', 'purchaseId', 'createdBy', 'createdAt'])
             && data.ingredientId is string
             && data.itemName is string

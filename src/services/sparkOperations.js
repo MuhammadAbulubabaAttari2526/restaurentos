@@ -309,6 +309,22 @@ async function transitionOrder(data) {
       if (typeof data.reason !== 'string' || !data.reason.trim()) fail('Enter a cancellation reason.')
       if ((finance.data().paidCents || 0) > 0) fail('Record a refund before cancelling a paid order.')
     }
+    const restocks = []
+    if (to === 'cancelled') {
+      const itemIds = [...new Set((order.data().items || []).map((line) => safeId(line.itemId, 'Menu item')))]
+      const menuRefs = itemIds.map((id) => path(actor.restaurantId, 'menuItems', id))
+      const menuSnapshots = await Promise.all(menuRefs.map((ref) => transaction.get(ref)))
+      if (menuSnapshots.some((snapshot) => !snapshot.exists())) fail('A cancelled order references a menu item that no longer exists.')
+      const menuById = new Map(itemIds.map((id, index) => [id, menuSnapshots[index].data()]))
+      const needs = calculateRecipeNeeds(order.data().items || [], menuById)
+      const ingredientIds = [...needs.keys()]
+      const stockRefs = ingredientIds.map((id) => path(actor.restaurantId, 'inventory', id))
+      const stockSnapshots = await Promise.all(stockRefs.map((ref) => transaction.get(ref)))
+      for (let index = 0; index < ingredientIds.length; index += 1) {
+        if (!stockSnapshots[index].exists()) fail('A cancelled order references stock that no longer exists.')
+        restocks.push({ ingredientId: ingredientIds[index], quantity: needs.get(ingredientIds[index]), stock: stockSnapshots[index].data() })
+      }
+    }
     const tableRef = order.data().tableId ? path(actor.restaurantId, 'tables', order.data().tableId) : null
     const paymentState = order.data().paymentStatus || finance?.data()?.paymentStatus
     const table = tableRef && (to === 'cancelled' || (to === 'served' && isSettledPaymentStatus(paymentState)))
@@ -320,6 +336,26 @@ async function transitionOrder(data) {
       updatedAt: serverTimestamp(),
       ...(to === 'cancelled' ? { cancellationReason: data.reason.trim().slice(0, 300), cancelledBy: actor.uid } : {}),
     })
+    for (const restock of restocks) {
+      const movementId = `${orderId}_cancel_${restock.ingredientId}`
+      transaction.update(path(actor.restaurantId, 'inventory', restock.ingredientId), {
+        quantityOnHand: Number(restock.stock.quantityOnHand || 0) + restock.quantity,
+        lastMovementId: movementId,
+        updatedAt: serverTimestamp(),
+      })
+      transaction.set(path(actor.restaurantId, 'stockMovements', movementId), {
+        restaurantId: actor.restaurantId,
+        ingredientId: restock.ingredientId,
+        itemName: restock.stock.name,
+        unit: restock.stock.unit,
+        movementType: 'order_cancel_restock',
+        quantity: restock.quantity,
+        reason: 'Order cancelled',
+        orderId,
+        createdBy: actor.uid,
+        createdAt: serverTimestamp(),
+      })
+    }
     if (table?.exists()) transaction.update(tableRef, { status: 'available', currentOrderId: null, updatedAt: serverTimestamp() })
     transaction.set(operationRef, { actorId: actor.uid, createdAt: serverTimestamp() })
     createAudit(transaction, actor, `order.${to}`, orderId, to === 'cancelled' ? { reason: data.reason.trim().slice(0, 300) } : {})

@@ -109,6 +109,30 @@ describe('Spark order draft persistence', () => {
     expect(mocks.records.get('restaurants/restaurant-1/users/staff-1').removedAt).toBeDefined()
     expect(mocks.records.get('accountMemberships/staff-1').active).toBe(true)
   })
+
+  it('restores recipe stock once when an order is cancelled', async () => {
+    mocks.records.set('restaurants/restaurant-1/orders/order-1', {
+      status: 'queued', tableId: null, items: [{ itemId: 'menu-1', quantity: 2 }],
+    })
+    mocks.records.set('restaurants/restaurant-1/orderFinancials/order-1', { paidCents: 0, paymentStatus: 'unpaid' })
+    mocks.records.set('restaurants/restaurant-1/menuItems/menu-1', {
+      available: true, priceCents: 500, recipe: [{ ingredientId: 'stock-1', quantity: 0.5 }],
+    })
+    mocks.records.set('restaurants/restaurant-1/inventory/stock-1', {
+      name: 'Rice', unit: 'kg', quantityOnHand: 1, averageCostCents: 300,
+    })
+    const cancellation = { orderId: 'order-1', requestId: 'cancel-1', to: 'cancelled', reason: 'Guest changed plans' }
+
+    const first = await runSparkOperation('transitionOrder', cancellation)
+    const second = await runSparkOperation('transitionOrder', cancellation)
+
+    expect(first).toMatchObject({ status: 'cancelled', duplicate: false })
+    expect(second).toMatchObject({ duplicate: true })
+    expect(mocks.records.get('restaurants/restaurant-1/inventory/stock-1').quantityOnHand).toBe(2)
+    expect(mocks.records.get('restaurants/restaurant-1/stockMovements/order-1_cancel_stock-1')).toMatchObject({
+      movementType: 'order_cancel_restock', quantity: 1, orderId: 'order-1',
+    })
+  })
 })
 
 function snapshotFor(path) {

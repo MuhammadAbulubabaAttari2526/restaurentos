@@ -144,6 +144,23 @@ rulesTest('Firestore tenant and role rules', () => {
       movementType: 'receive', quantity: 2, reason: 'Opening receipt', createdBy: 'owner-1', createdAt: serverTimestamp(),
     })
     await assertSucceeds(batch.commit())
+
+    await environment.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'restaurants/alpha/orders/cancelled-order'), {
+        status: 'preparing', createdBy: 'owner-1',
+      })
+    })
+    const restockBatch = writeBatch(owner)
+    restockBatch.update(doc(owner, 'restaurants/alpha/orders/cancelled-order'), {
+      status: 'cancelled', cancellationReason: 'Guest changed plans', cancelledBy: 'owner-1', updatedAt: serverTimestamp(),
+    })
+    restockBatch.update(stockRef, { quantityOnHand: 14, lastMovementId: 'cancel-restock', updatedAt: serverTimestamp() })
+    restockBatch.set(doc(owner, 'restaurants/alpha/stockMovements/cancel-restock'), {
+      restaurantId: 'alpha', ingredientId: 'flour', itemName: 'Flour', unit: 'kg',
+      movementType: 'order_cancel_restock', quantity: 2, reason: 'Order cancelled',
+      orderId: 'cancelled-order', createdBy: 'owner-1', createdAt: serverTimestamp(),
+    })
+    await assertSucceeds(restockBatch.commit())
   })
 
   it('limits drafts to their creator and prevents forged customer rollups', async () => {

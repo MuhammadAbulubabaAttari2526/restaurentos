@@ -148,6 +148,7 @@ function createDemoRecords() {
       { id: 'reservation-demo-1', tableId: 'table-2', tableName: 'Table 2', guestName: 'Farah Malik', phone: '+92 301 555 1234', covers: 2, startsAt: minutesAgo(-90), endsAt: minutesAgo(-210), status: 'booked', createdBy: demoUser.uid, createdAt: minutesAgo(60) },
     ],
     draftOrders: [],
+    operationKeys: [],
     staffInvitations: [],
   }
 }
@@ -361,12 +362,35 @@ export async function runDemoOperation(name, payload = {}) {
     case 'transitionOrder': {
       const order = demoRecords.orders.find((entry) => entry.id === payload.orderId)
       if (!order) throw new Error('Order not found in demo data.')
+      const requestId = payload.requestId || makeId('transition')
+      const operationId = `transition_${requestId}`
+      if (demoRecords.operationKeys.some((entry) => entry.id === operationId)) return { orderId: order.id, duplicate: true }
       const legal = { queued: ['preparing', 'cancelled'], preparing: ['ready', 'cancelled'], ready: ['served'] }
       if (!legal[order.status]?.includes(payload.to)) throw new Error(`An order cannot move from ${order.status} to ${payload.to}.`)
       if (payload.to === 'cancelled' && financialFor(order.id).paidCents > 0) throw new Error('Refund the demo payment before cancelling this order.')
+      if (payload.to === 'cancelled') {
+        const menu = new Map(demoRecords.menuItems.map((item) => [item.id, item]))
+        const needs = calculateRecipeNeeds(order.items, menu)
+        for (const [ingredientId, quantity] of needs) {
+          const stock = demoRecords.inventory.find((entry) => entry.id === ingredientId)
+          if (!stock) throw new Error('A cancelled order references stock that no longer exists.')
+          const movementId = `${order.id}_cancel_${ingredientId}`
+          updateRecord('inventory', ingredientId, {
+            quantityOnHand: Number(stock.quantityOnHand || 0) + quantity,
+            lastMovementId: movementId,
+            updatedAt: now,
+          })
+          commit('stockMovements', [{
+            id: movementId, restaurantId: DEMO_RESTAURANT_ID, ingredientId, itemName: stock.name,
+            unit: stock.unit, movementType: 'order_cancel_restock', quantity, reason: 'Order cancelled',
+            orderId: order.id, createdBy: demoUser.uid, createdAt: now,
+          }, ...demoRecords.stockMovements])
+        }
+      }
       updateRecord('orders', order.id, { status: payload.to, updatedAt: now, ...(payload.to === 'cancelled' ? { cancellationReason: payload.reason } : {}) })
       if (payload.to === 'cancelled') updateRecord('orderFinancials', order.id, { status: 'cancelled', updatedAt: now })
       if (order.tableId && (payload.to === 'cancelled' || (payload.to === 'served' && isSettledPaymentStatus(order.paymentStatus)))) updateRecord('tables', order.tableId, { status: 'available', currentOrderId: null })
+      commit('operationKeys', [{ id: operationId, actorId: demoUser.uid, createdAt: now }, ...demoRecords.operationKeys])
       recordAudit(`order.${payload.to}`, order.id)
       return { orderId: order.id, status: payload.to, duplicate: false }
     }

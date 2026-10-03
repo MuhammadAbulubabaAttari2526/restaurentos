@@ -95,6 +95,32 @@ describe('isolated sample workspace', () => {
     unsubscribeTables()
   })
 
+  it('restores demo recipe stock once when cancelling an order', async () => {
+    activateDemoSession()
+    let inventory = []
+    let movements = []
+    const unsubscribeInventory = watchDemoRecords('inventory', (rows) => { inventory = rows })
+    const unsubscribeMovements = watchDemoRecords('stockMovements', (rows) => { movements = rows })
+    const startingChicken = inventory.find((entry) => entry.id === 'chicken').quantityOnHand
+    const created = await runDemoOperation('createOrder', {
+      requestId: 'cancel-demo-order', type: 'takeaway',
+      items: [{ itemId: 'grilled-chicken', quantity: 1 }],
+    })
+    const cancellation = { orderId: created.orderId, requestId: 'cancel-demo-request', to: 'cancelled', reason: 'Guest changed plans' }
+
+    const first = await runDemoOperation('transitionOrder', cancellation)
+    const second = await runDemoOperation('transitionOrder', cancellation)
+
+    expect(first).toMatchObject({ status: 'cancelled', duplicate: false })
+    expect(second).toMatchObject({ duplicate: true })
+    expect(inventory.find((entry) => entry.id === 'chicken').quantityOnHand).toBe(startingChicken)
+    expect(movements.find((entry) => entry.id === 'cancel-demo-order_cancel_chicken')).toMatchObject({
+      movementType: 'order_cancel_restock', quantity: 0.18, orderId: created.orderId,
+    })
+    unsubscribeInventory()
+    unsubscribeMovements()
+  })
+
   it('keeps demo order totals populated for display and payments', () => {
     activateDemoSession()
     let records = []
