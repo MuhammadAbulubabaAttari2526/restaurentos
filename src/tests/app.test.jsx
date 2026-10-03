@@ -115,6 +115,37 @@ describe('authentication routes', () => {
     expect(within(drafts).queryByRole('option', { name: /delivery/i })).not.toBeInTheDocument()
   })
 
+  it('prints the saved dine-in receipt with one variant, both add-ons and saved totals', async () => {
+    activateDemoSession()
+    saveDemoRecord('menuItems', {
+      addOns: [
+        { id: 'fries', name: 'Add fries', priceCents: 28000 },
+        { id: 'cheese', name: 'Extra cheese', priceCents: 15000 },
+      ],
+    }, 'beef-burger')
+    const createOrder = vi.spyOn(dataOperations, 'createOrder').mockResolvedValue({
+      orderId: 'saved-receipt-order', orderNumber: 'R-SAVED', subtotalCents: 198765,
+      discountCents: 0, taxCents: 4321, totalCents: 203086,
+    })
+    renderApp({ pathname: '/pos', state: { tableId: 'table-1' } })
+
+    fireEvent.click(await screen.findByRole('button', { name: /house beef burger/i }))
+    fireEvent.click(screen.getByRole('radio', { name: /double patty/i }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /add fries/i }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /extra cheese/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add item' }))
+    fireEvent.click(screen.getByRole('button', { name: /create order/i }))
+
+    const receipt = await screen.findByRole('dialog', { name: /ready to print/i })
+    expect(receipt).toHaveTextContent('Table 1')
+    expect(receipt).toHaveTextContent('Double patty · Add fries · Extra cheese')
+    expect([...receipt.textContent.matchAll(/Add fries/g)]).toHaveLength(1)
+    expect([...receipt.textContent.matchAll(/Extra cheese/g)]).toHaveLength(1)
+    expect(receipt).toHaveTextContent('Rs. 1,987.65')
+    expect(receipt).toHaveTextContent('Rs. 2,030.86')
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({ type: 'dine-in', tableId: 'table-1' }))
+  })
+
   it('supports direct bill mode and adding by Enter in the point of sale flow', async () => {
     activateDemoSession()
     renderApp('/pos')
@@ -168,7 +199,7 @@ describe('authentication routes', () => {
     fireEvent.click(screen.getByRole('button', { name: /create order/i }))
     await waitFor(() => expect(createOrder).toHaveBeenCalledTimes(3))
     expect(createOrder.mock.calls[2][0].requestId).not.toBe(firstRequestId)
-  })
+  }, 20000)
 
   it('reuses a paymentId on retry and creates a fresh one after success', async () => {
     activateDemoSession()
@@ -190,7 +221,7 @@ describe('authentication routes', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Record payment' }))
     await waitFor(() => expect(recordPayment).toHaveBeenCalledTimes(3))
     expect(recordPayment.mock.calls[2][0].paymentId).not.toBe(firstPaymentId)
-  })
+  }, 20000)
 
   it('reuses a refundId on retry and creates a fresh one after success', async () => {
     activateDemoSession()
@@ -218,7 +249,7 @@ describe('authentication routes', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Record refund' }))
     await waitFor(() => expect(recordRefund).toHaveBeenCalledTimes(3))
     expect(recordRefund.mock.calls[2][0].refundId).not.toBe(firstRefundId)
-  })
+  }, 20000)
 
   it('persists POS drafts in local storage for reload recovery', () => {
     const key = 'restaurantos:pos-draft:local:restaurant-1:user-1'

@@ -319,7 +319,9 @@ function PosPage() {
             name: line.name,
             quantity: line.quantity,
             unitPriceCents: line.unitPriceCents,
-            selectedVariant: line.selectedVariantId ? { name: line.optionLabel } : null,
+            selectedVariant: line.selectedVariantId
+              ? { name: selectedItem?.variants?.find((variant) => variant.id === line.selectedVariantId)?.name || '' }
+              : null,
             selectedAddOns: addOnNames.map((name) => ({ name })),
           }
         }),
