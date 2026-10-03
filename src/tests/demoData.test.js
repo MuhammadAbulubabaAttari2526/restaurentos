@@ -175,6 +175,21 @@ describe('isolated sample workspace', () => {
     unsubscribeOrders()
   })
 
+  it('resolves the category for a demo menu item without a saved categoryName', async () => {
+    activateDemoSession()
+    saveDemoRecord('menuItems', { categoryName: undefined }, 'lemonade')
+    let financials = []
+    const unsubscribe = watchDemoRecords('orderFinancials', (rows) => { financials = rows })
+    await runDemoOperation('createOrder', {
+      requestId: 'legacy-demo-category-order', type: 'takeaway',
+      items: [{ itemId: 'lemonade', quantity: 1 }],
+    })
+
+    expect(financials.find((entry) => entry.id === 'legacy-demo-category-order').items[0])
+      .toMatchObject({ itemId: 'lemonade', categoryName: 'Drinks' })
+    unsubscribe()
+  })
+
   it('keeps demo order totals populated for display and payments', () => {
     activateDemoSession()
     let records = []

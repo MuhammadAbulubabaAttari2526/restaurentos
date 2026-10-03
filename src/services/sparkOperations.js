@@ -107,7 +107,14 @@ async function createOrder(data) {
 
     const menuById = new Map(menuRefs.map((ref, index) => [itemIds[index], menuSnapshots[index].data()]))
     if (menuSnapshots.some((snapshot) => !snapshot.exists() || snapshot.data().available === false)) fail('One or more items are no longer available.')
-    const lines = data.items.map((line) => priceMenuLine(menuById.get(line.itemId), line))
+    const categoryIds = [...new Set(menuSnapshots.map((snapshot) => snapshot.data().categoryId).filter((id) => typeof id === 'string' && id))]
+    const categoryRefs = categoryIds.map((id) => path(actor.restaurantId, 'categories', id))
+    const categorySnapshots = await Promise.all(categoryRefs.map((ref) => transaction.get(ref)))
+    const categoryNames = new Map(categoryIds.map((id, index) => [id, categorySnapshots[index].exists() ? categorySnapshots[index].data().name : '']))
+    const lines = data.items.map((line) => {
+      const priced = priceMenuLine(menuById.get(line.itemId), line)
+      return { ...priced, categoryName: priced.categoryName || categoryNames.get(priced.categoryId) || '' }
+    })
     const recipeNeeds = calculateRecipeNeeds(data.items, menuById)
     const stockRefs = [...recipeNeeds.keys()].map((id) => path(actor.restaurantId, 'inventory', id))
     const stockSnapshots = await Promise.all(stockRefs.map((ref) => transaction.get(ref)))

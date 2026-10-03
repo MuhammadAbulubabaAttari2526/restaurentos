@@ -100,7 +100,7 @@ rulesTest('Firestore tenant and role rules', () => {
     }
     const finance = {
       restaurantId: 'alpha', orderId: 'atomic-order', customerId: null,
-      items: [{ itemId: 'soup', name: 'Soup', quantity: 1, unitPriceCents: 900 }],
+      items: [{ itemId: 'soup', name: 'Soup', categoryId: 'soups', categoryName: 'Soup & starters', quantity: 1, unitPriceCents: 900 }],
       subtotalCents: 900, discountCents: 0, taxCents: 0, totalCents: 900,
       paidCents: 0, refundedCents: 0, customerVisitCounted: false,
       status: 'active', paymentStatus: 'unpaid', createdAt: timestamp, updatedAt: timestamp,

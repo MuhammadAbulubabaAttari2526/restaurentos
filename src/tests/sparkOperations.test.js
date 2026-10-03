@@ -133,6 +133,22 @@ describe('Spark order draft persistence', () => {
       movementType: 'order_cancel_restock', quantity: 1, orderId: 'order-1',
     })
   })
+
+  it('resolves a legacy menu category name while creating an order', async () => {
+    mocks.records.set('restaurants/restaurant-1/settings/profile', { taxRate: 0, paymentMethods: ['cash'] })
+    mocks.records.set('restaurants/restaurant-1/menuItems/legacy-menu', {
+      name: 'Legacy soup', categoryId: 'soups', priceCents: 500, available: true,
+    })
+    mocks.records.set('restaurants/restaurant-1/categories/soups', { name: 'Soup & starters' })
+
+    await runSparkOperation('createOrder', {
+      requestId: 'legacy-category-order', type: 'takeaway',
+      items: [{ itemId: 'legacy-menu', quantity: 1 }],
+    })
+
+    expect(mocks.records.get('restaurants/restaurant-1/orderFinancials/legacy-category-order').items[0])
+      .toMatchObject({ itemId: 'legacy-menu', categoryId: 'soups', categoryName: 'Soup & starters' })
+  })
 })
 
 function snapshotFor(path) {

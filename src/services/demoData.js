@@ -336,7 +336,11 @@ export async function runDemoOperation(name, payload = {}) {
       const id = payload.requestId || makeId('order')
       if (demoRecords.orders.some((order) => order.id === id)) return { orderId: id, orderNumber: demoRecords.orders.find((order) => order.id === id).orderNumber, duplicate: true }
       const menu = new Map(demoRecords.menuItems.map((item) => [item.id, item]))
-      const items = payload.items.map((line) => priceMenuLine(menu.get(line.itemId), line))
+      const items = payload.items.map((line) => {
+        const priced = priceMenuLine(menu.get(line.itemId), line)
+        const categoryName = priced.categoryName || demoRecords.categories.find((category) => category.id === priced.categoryId)?.name || ''
+        return { ...priced, categoryName }
+      })
       const subtotalCents = items.reduce((sum, line) => sum + line.unitPriceCents * line.quantity, 0)
       const discountCents = Math.min(Math.max(0, Number(payload.discountCents) || 0), subtotalCents)
       const settings = demoRecords.settings[0]
