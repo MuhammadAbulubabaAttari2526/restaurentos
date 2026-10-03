@@ -77,6 +77,21 @@ describe('authentication routes', () => {
     expect(await screen.findByRole('button', { name: /delete/i })).toBeInTheDocument()
   })
 
+  it('saves a new menu item as available when the availability field is untouched', async () => {
+    activateDemoSession()
+    renderApp('/menu')
+
+    fireEvent.click(await screen.findByRole('button', { name: /add menu item/i }))
+    fireEvent.change(screen.getByLabelText('Item name'), { target: { value: 'Availability regression item' } })
+    fireEvent.change(screen.getByLabelText('Base price'), { target: { value: '1.00' } })
+    fireEvent.change(screen.getByLabelText('Category'), { target: { value: 'mains' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const item = await screen.findByText('Availability regression item')
+    expect(item.closest('tr')).toHaveTextContent('Available')
+    expect(item.closest('tr')).not.toHaveTextContent('Unavailable')
+  })
+
   it('supports direct bill mode and adding by Enter in the point of sale flow', async () => {
     activateDemoSession()
     renderApp('/pos')

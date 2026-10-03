@@ -841,7 +841,7 @@ function MenuManagement() {
         categoryId: values.categoryId,
         categoryName: categories.find((category) => category.id === values.categoryId)?.name || '',
         priceCents,
-        available: values.available === 'true',
+        available: String(values.available) !== 'false',
         imageUrl,
         variants: parseMenuOptions(values.variantsText, 'priceDeltaCents', editItem.variants || []),
         addOns: parseMenuOptions(values.addOnsText, 'priceCents', editItem.addOns || []),
