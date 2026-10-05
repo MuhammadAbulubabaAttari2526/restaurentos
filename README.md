@@ -58,6 +58,33 @@ Start Authentication, Firestore and Hosting emulators:
 npx firebase-tools emulators:start --project demo-restaurantos --only auth,firestore,hosting
 ```
 
+---
+
+## Windows Desktop POS & Data Safety Architecture
+
+RestaurantOS includes an enterprise-grade Windows Desktop POS build running offline-first on Electron with a local SQLite database (`better-sqlite3`).
+
+### 1. Data Safety & App Identity Locking (CRITICAL)
+- **`appId`:** `"com.restaurantos.pos"`
+- **`productName`:** `"RestaurantOS"`
+- **RULE:** Never change `appId` or `productName` in `package.json`. Modifying either value alters Electron's `userData` directory path (`%APPDATA%/RestaurantOS`), which causes the app to generate a fresh, empty database and lose connection to existing restaurant sales and customer data.
+- **Data Location:** All SQLite database files (`restaurantos.db`) and backups are stored exclusively in `%APPDATA%/RestaurantOS/database` and `%APPDATA%/RestaurantOS/backups`. No persistent data is ever written to `Program Files`.
+- **NSIS Uninstaller Guard:** `deleteAppDataOnUninstall: false` is strictly enforced in `package.json`. Uninstalling or upgrading the app preserves restaurant database records and backups.
+
+### 2. Migration Safety & Online Backups
+- **Pre-Migration Backups:** Before any schema migration (`001`, `002`, `003`...) executes, an automatic online SQLite snapshot is created (`backups/backup-before-v<from>-to-v<to>-<timestamp>.db`) using SQLite's zero-lock backup API.
+- **Atomic Transactions:** Each migration runs inside a strict SQLite transaction. Any error triggers an immediate rollback, leaving existing data untouched and valid.
+- **Version Compatibility Guard:** If the database file version is newer than the application version (e.g. older app opened on a newer database), execution immediately halts with an upgrade warning to prevent schema downgrades or data corruption.
+- **Restore Safety:** Restoring any backup creates a safety snapshot (`backup-before-restore-<timestamp>.db`) prior to applying the restored file.
+- **Backup Retention:** The backup manager enforces an automatic retention policy (keeping the latest 14 backups) to protect disk space.
+
+### 3. Auto-Updater (electron-updater)
+- Configured with GitHub Releases provider.
+- Silent background downloads that never interrupt active cashier transactions.
+- Silent fail-over: if offline, the update check skips gracefully without error popups.
+- Creates a safety database backup before applying updates.
+
+
 Set `VITE_USE_FIREBASE_EMULATORS=true` in `.env.local`, provide syntactically valid Firebase web configuration, and run `npm run dev` in another terminal.
 
 ## Build And Deploy

@@ -40,7 +40,20 @@ export function AuthProvider({ children }) {
       setLoading(true)
       setUser(nextUser)
       try {
-        setMembership(nextUser ? await getMembership(nextUser) : null)
+        const mem = nextUser ? await getMembership(nextUser) : null
+        setMembership(mem)
+        if (mem?.restaurantId) {
+          window.sessionStorage.setItem('activeRestaurantId', mem.restaurantId)
+          if (typeof window !== 'undefined' && window.posApi?.sync) {
+            nextUser.getIdToken().then((token) => {
+              window.posApi.sync.setCredentials({
+                projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+                authToken: token,
+                restaurantId: mem.restaurantId,
+              })
+            }).catch(() => {})
+          }
+        }
       } catch {
         setMembership(null)
       } finally {

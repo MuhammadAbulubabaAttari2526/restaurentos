@@ -31,6 +31,7 @@ export function AppLayout({ children }) {
   const { user, membership, logout } = useAuth()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [restaurantName, setRestaurantName] = useState('')
+  const [syncState, setSyncState] = useState({ isOnline: true, status: 'idle', pendingCount: 0 })
   const location = useLocation()
   const role = membership?.role || 'staff'
   const visibleLinks = links.filter((link) => link.roles.includes(role))
@@ -40,6 +41,15 @@ export function AppLayout({ children }) {
   function closeDrawer() {
     setDrawerOpen(false)
   }
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.posApi?.sync) {
+      window.posApi.sync.getStatus().then(setSyncState).catch(() => {})
+      return window.posApi.sync.onStatusChange((status) => {
+        setSyncState(status)
+      })
+    }
+  }, [])
 
   useEffect(() => {
     const restaurantId = membership?.restaurantId
@@ -84,7 +94,37 @@ export function AppLayout({ children }) {
         <div className="sidebar-bottom"><div className="help-panel"><div className="help-glyph">?</div><div><strong>Need a hand?</strong><span>Check setup guide</span></div></div><button className="profile-row" onClick={logout}><div className="profile-avatar">{(user?.email || 'U').slice(0, 1).toUpperCase()}</div><div className="profile-details"><strong>{user?.displayName || user?.email?.split('@')[0] || 'Team member'}</strong><span>{role}</span></div><LogOut size={17} /></button></div>
       </aside>
       <div className="main-column">
-        <header className="topbar"><button ref={menuButtonRef} className="icon-button mobile-menu" aria-label="Open navigation" aria-expanded={drawerOpen} aria-controls="workspace-navigation" onClick={() => setDrawerOpen(true)}><Menu size={20} /></button><div className="breadcrumbs"><span>Workspace</span><span>/</span><strong>{pageNames[location.pathname] || 'Restaurant operations'}</strong></div><div className="topbar-right"><span className={`service-status ${membership?.demo ? 'demo-status' : ''}`}><i /> {membership?.demo ? 'Demo · sample data' : 'Live workspace'}</span></div></header>
+        <header className="topbar">
+          <button ref={menuButtonRef} className="icon-button mobile-menu" aria-label="Open navigation" aria-expanded={drawerOpen} aria-controls="workspace-navigation" onClick={() => setDrawerOpen(true)}>
+            <Menu size={20} />
+          </button>
+          <div className="breadcrumbs">
+            <span>Workspace</span>
+            <span>/</span>
+            <strong>{pageNames[location.pathname] || 'Restaurant operations'}</strong>
+          </div>
+          <div className="topbar-right">
+            {typeof window !== 'undefined' && window.posApi?.isElectron ? (
+              <button
+                className={`service-status ${!syncState.isOnline ? 'offline-status' : syncState.status === 'syncing' ? 'syncing-status' : 'desktop-status'}`}
+                onClick={() => window.posApi?.sync?.trigger().catch(() => {})}
+                title="Click to trigger sync"
+                style={{ cursor: 'pointer', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '9999px', padding: '4px 12px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              >
+                <i style={{ width: '8px', height: '8px', borderRadius: '50%', display: 'inline-block', background: !syncState.isOnline ? '#94a3b8' : syncState.status === 'syncing' ? '#f59e0b' : '#10b981' }} />
+                {!syncState.isOnline
+                  ? 'Offline POS · SQLite'
+                  : syncState.status === 'syncing'
+                  ? `Syncing (${syncState.pendingCount} pending)`
+                  : syncState.pendingCount > 0
+                  ? `Sync (${syncState.pendingCount} pending)`
+                  : 'Desktop POS · Synced'}
+              </button>
+            ) : (
+              <span className={`service-status ${membership?.demo ? 'demo-status' : ''}`}><i /> {membership?.demo ? 'Demo · sample data' : 'Live workspace'}</span>
+            )}
+          </div>
+        </header>
         <main className="page-content">{membership?.demo && <div className="demo-banner"><strong>Sample data only</strong><span>Changes reset when you sign out or refresh this tab.</span></div>}{children}</main>
       </div>
     </div>

@@ -1,19 +1,78 @@
 {
-  "name": "rms",
+  "name": "restaurantos",
+  "productName": "RestaurantOS",
+  "version": "1.0.0",
+  "description": "RestaurantOS Professional Offline POS System",
+  "author": "RestaurantOS",
   "private": true,
-  "version": "0.0.0",
   "type": "module",
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.restaurantos.pos",
+    "productName": "RestaurantOS",
+    "npmRebuild": false,
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "database/**/*",
+      "sync/**/*",
+      "printing/**/*",
+      "reports/**/*",
+      "backup/**/*",
+      "updater/**/*",
+      "package.json"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "MuhammadAbulubabaAttari2526",
+        "repo": "restaurentos"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "RestaurantOS"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
+    "electron:dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "electron:preview": "npm run build && electron .",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "postinstall": "electron-builder install-app-deps",
     "test": "vitest run",
+    "test:electron": "electron test-electron-headless.cjs",
     "test:watch": "vitest",
     "test:rules": "firebase emulators:exec --project demo-restaurantos --only firestore \"vitest run src/tests/firestore.rules.test.js\""
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
+    "better-sqlite3": "^13.0.3",
+    "electron-updater": "^6.8.9",
     "firebase": "^12.19.0",
     "lucide-react": "^1.49.0",
     "react": "^19.2.8",
@@ -32,11 +91,16 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "cross-env": "^10.1.0",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
     "firebase-tools": "^15.32.0",
     "jsdom": "^30.1.1",
     "oxlint": "^1.81.0",
     "tailwindcss": "^4.3.3",
     "vite": "^8.3.0",
-    "vitest": "^5.0.2"
+    "vitest": "^5.0.2",
+    "wait-on": "^9.5.1"
   }
 }
