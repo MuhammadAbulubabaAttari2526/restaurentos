@@ -284,11 +284,10 @@ async function restoreBackup(backupFileNameOrPath, getDbFn, closeDbFn) {
   const targetDbPath = path.join(dbDir, 'restaurantos.db')
 
   // 1. Take safety pre-restore backup if current DB exists
-  let preRestoreBackup = null
   const currentDb = getDbFn()
   if (currentDb) {
     console.log('[Restore] Creating safety pre-restore backup of current DB...')
-    preRestoreBackup = await createBackup(currentDb, 'pre_restore')
+    await createBackup(currentDb, 'pre_restore')
   }
 
   // 2. Close current DB
@@ -315,7 +314,6 @@ async function restoreBackup(backupFileNameOrPath, getDbFn, closeDbFn) {
   return {
     success: true,
     message: 'Database restored successfully.',
-    preRestoreBackup,
   }
 }
 

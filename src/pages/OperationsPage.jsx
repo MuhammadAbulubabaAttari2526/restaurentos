@@ -4,9 +4,8 @@ import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  ArrowDownLeft, ArrowUpRight, Banknote, CalendarDays, CheckCircle2, CirclePlus, Clock3,
-  Database, Download, HardDrive, Minus, Plus, Printer, RefreshCw, RotateCcw,
-  Search, Settings, ShoppingBag, Trash2, Utensils, Users,
+  ArrowDownLeft, ArrowUpRight, Banknote, CalendarDays, CirclePlus, Clock3,
+  Minus, Plus, Printer, Search, Settings, ShoppingBag, Trash2, Utensils, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../context/useAuth.js'
@@ -306,9 +305,8 @@ function PosPage() {
       writePosDraft(draftStorageKey, { cart: [], orderType: 'direct-bill', tableId: '', covers: 1, customerId: '', note: '', discount: '', activeDraftId: null })
       toast.success('Order created.')
       const tableName = tables.find((table) => table.id === tableId)?.name || ''
-      const receiptObj = {
+      setReceipt({
         id: created?.orderId || requestId,
-        restaurantId: membership?.restaurantId,
         orderNumber: created?.orderNumber || `DB-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`,
         type: orderType,
         tableName,
@@ -335,29 +333,7 @@ function PosPage() {
             selectedAddOns: addOnNames.map((name) => ({ name })),
           }
         }),
-      }
-      setReceipt(receiptObj)
-
-      // Auto-print receipt and/or KOT if enabled on default printer
-      if (typeof window !== 'undefined' && window.posApi?.print && membership?.restaurantId) {
-        window.posApi.print.listPrinters(membership.restaurantId).then((printers) => {
-          const defPrinter = printers?.find((p) => p.is_default || p.isDefault) || printers?.[0]
-          if (defPrinter?.auto_print) {
-            window.posApi.print.receipt({
-              restaurantId: membership.restaurantId,
-              orderId: created?.orderId || requestId,
-              order: receiptObj,
-            }).catch((err) => console.warn('[Auto-print receipt failed]', err))
-          }
-          if (defPrinter?.auto_print_kot) {
-            window.posApi.print.kot({
-              restaurantId: membership.restaurantId,
-              orderId: created?.orderId || requestId,
-              order: receiptObj,
-            }).catch((err) => console.warn('[Auto-print KOT failed]', err))
-          }
-        }).catch(() => {})
-      }
+      })
       orderIntentIdRef.current = null
       resetStableIntentId(activeDraftId || 'pos-order')
       setCart([])
@@ -388,7 +364,7 @@ function PosPage() {
       {orderType === 'dine-in' && <label className="compact-label">Guests<input aria-label="Guests" type="number" min="1" max="40" step="1" required value={covers} onChange={(event) => setCovers(event.target.value)} /></label>}
       <div className="cart-totals"><div><span>Subtotal</span><span>{money(totals.subtotalCents)}</span></div>{totals.discountCents > 0 && <div><span>Discount</span><span>−{money(totals.discountCents)}</span></div>}<div><span>Tax</span><span>{money(totals.taxCents)}</span></div><div className="cart-grand-total"><strong>Total</strong><strong>{money(totals.totalCents)}</strong></div></div>
       <button className="button button-primary send-order" onClick={submitOrder} disabled={busy || !cart.length}>{busy ? 'Saving order…' : 'Create order'}<ArrowUpRight size={17} /></button><p className="cart-security-note">Prices and tax are recalculated from the current menu before saving.</p>
-    </aside></div>{optionItem && <MenuOptionsDialog item={optionItem} onCancel={() => setOptionItem(null)} onAdd={(variantId, addOnIds) => { addToCart(optionItem, variantId, addOnIds); setOptionItem(null) }} />}{receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} restaurantId={membership?.restaurantId} onClose={() => setReceipt(null)} />}</div>
+    </aside></div>{optionItem && <MenuOptionsDialog item={optionItem} onCancel={() => setOptionItem(null)} onAdd={(variantId, addOnIds) => { addToCart(optionItem, variantId, addOnIds); setOptionItem(null) }} />}{receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} onClose={() => setReceipt(null)} />}</div>
 }
 
 function MenuOptionsDialog({ item, onCancel, onAdd }) {
@@ -485,7 +461,7 @@ function OrdersPage() {
     <section className="panel records-panel">{loading ? <LoadingLines /> : visible.length ? <div className="table-scroll"><table><thead><tr><th>Order</th><th>Placed</th><th>Type / table</th><th>Items</th>{canSeeFinancials && <><th>Payment</th><th>Total</th></>}<th>Next action</th></tr></thead><tbody>{visible.map((order) => <tr key={order.id}><td><strong>{order.orderNumber || `#${order.id.slice(0, 7)}`}</strong></td><td>{formatDate(order.createdAt)}</td><td>{order.type || 'dine-in'}{order.tableName ? ` · ${order.tableName}` : ''}</td><td>{order.items?.reduce((sum, item) => sum + item.quantity, 0) || 0} items</td>{canSeeFinancials && <><td><button className={`payment-status ${order.paymentStatus === 'paid' ? 'paid' : ''}`} onClick={() => setPaymentOrder(order)}>{order.paymentStatus || 'unpaid'}{order.paymentStatus !== 'paid' && <CirclePlus size={14} />}</button></td><td>{money(order.totalCents)}</td></>}<td><div className="row-actions">{order.status && !['served', 'cancelled'].includes(order.status) && <><button className="button button-small" onClick={() => openOrderAction(order)} disabled={busyId === order.id}>{busyId === order.id ? 'Updating' : nextAction(order.status)}</button>{canVoidOrders && <button className="button button-small button-danger" onClick={() => cancelOrder(order)} disabled={busyId === order.id}>Cancel</button>}{canTransferTable && order.type === 'dine-in' && <button className="button button-small" onClick={() => setTransferTarget(order)}>Transfer table</button>}</>}{canSeeFinancials && <button className="icon-button" title="Print receipt" aria-label="Print receipt" onClick={() => setReceipt(order)}><Printer size={16} /></button>}</div></td></tr>)}</tbody></table></div> : <EmptyState title="No orders in this view" detail="New POS orders will appear here as soon as they are sent." />}</section>
     {detailsOrder && <OrderDetailsDialog order={detailsOrder} canSeeFinancials={canSeeFinancials} onClose={() => setDetailsOrder(null)} />}
     {paymentOrder && <PaymentDialog order={paymentOrder} onClose={() => setPaymentOrder(null)} />}
-    {receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} restaurantId={membership?.restaurantId} onClose={() => setReceipt(null)} />}
+    {receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} onClose={() => setReceipt(null)} />}
     {transferTarget && <TransferTableDialog order={transferTarget} onClose={() => setTransferTarget(null)} onTransferred={() => setTransferTarget(null)} />}
   </>
 }
@@ -1075,458 +1051,10 @@ function StaffPermissionsDialog({ staff, busy, onClose, onSave }) {
   return <div className="modal-backdrop" role="presentation"><section className="modal-panel permission-dialog" role="dialog" aria-modal="true" aria-labelledby="permission-title"><div className="modal-heading permission-header"><div><p className="eyebrow">{staff.role.toUpperCase()} ACCESS</p><h2 id="permission-title">{staff.displayName || staff.email}</h2></div><button className="icon-button" aria-label="Close" onClick={onClose}>×</button></div><fieldset className="permission-list"><legend>Additional permissions</legend>{options.map((option) => <label className="permission-option" key={option.id}><input type="checkbox" checked={selected.includes(option.id)} onChange={() => toggle(option.id)} /><span>{option.label}</span></label>)}</fieldset><div className="modal-actions permission-actions"><button className="button button-subtle" onClick={onClose}>Cancel</button><button className="button button-primary" onClick={() => onSave(selected)} disabled={busy}>{busy ? 'Saving…' : 'Save permissions'}</button></div></section></div>
 }
 
-function PrinterSettingsSection({ restaurantId }) {
-  const [printers, setPrinters] = useState([])
-  const [windowsPrinters, setWindowsPrinters] = useState([])
-  const [selectedPrinterName, setSelectedPrinterName] = useState('')
-  const [paperWidth, setPaperWidth] = useState(80)
-  const [copies, setCopies] = useState(1)
-  const [autoPrint, setAutoPrint] = useState(false)
-  const [autoPrintKot, setAutoPrintKot] = useState(false)
-  const [connectionType, setConnectionType] = useState('driver')
-  const [ipAddress, setIpAddress] = useState('')
-  const [port, setPort] = useState(9100)
-  const [busy, setBusy] = useState(false)
-  const [testing, setTesting] = useState(false)
-
-  useEffect(() => {
-    if (!window.posApi?.print || !restaurantId) return
-    window.posApi.print.listWindowsPrinters().then((names) => {
-      setWindowsPrinters(names || [])
-    }).catch(() => {})
-
-    window.posApi.print.listPrinters(restaurantId).then((records) => {
-      setPrinters(records || [])
-      const def = records?.find((p) => p.is_default || p.isDefault) || records?.[0]
-      if (def) {
-        setSelectedPrinterName(def.name || '')
-        setPaperWidth(def.paper_width || def.paperWidth || 80)
-        setCopies(def.copies || 1)
-        setAutoPrint(Boolean(def.auto_print || def.autoPrint))
-        setAutoPrintKot(Boolean(def.auto_print_kot || def.autoPrintKot))
-        setConnectionType(def.connection_type || def.connectionType || 'driver')
-        setIpAddress(def.ip_address || def.ipAddress || '')
-        setPort(def.port || 9100)
-      }
-    }).catch(() => {})
-  }, [restaurantId])
-
-  async function handleSavePrinter(event) {
-    event.preventDefault()
-    if (!selectedPrinterName?.trim()) {
-      return toast.error('Please select or specify a printer name.')
-    }
-    setBusy(true)
-    try {
-      const printerId = printers[0]?.id || 'default-printer'
-      const payload = {
-        name: selectedPrinterName.trim(),
-        connection_type: connectionType,
-        ip_address: ipAddress.trim(),
-        port: Number(port) || 9100,
-        paper_width: Number(paperWidth) === 58 ? 58 : 80,
-        copies: Math.max(1, Math.min(5, Number(copies) || 1)),
-        auto_print: autoPrint ? 1 : 0,
-        auto_print_kot: autoPrintKot ? 1 : 0,
-        is_default: 1,
-      }
-      await window.posApi.db.upsert(restaurantId, 'printers', payload, printerId)
-      toast.success('Thermal printer settings saved.')
-      const refreshed = await window.posApi.print.listPrinters(restaurantId)
-      setPrinters(refreshed || [])
-    } catch (err) {
-      toast.error(friendlyError(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function handleTestPrint() {
-    setTesting(true)
-    try {
-      await window.posApi.print.test({ restaurantId })
-      toast.success('Test print sent to printer!')
-    } catch (err) {
-      toast.error(`Test print failed: ${friendlyError(err)}`)
-    } finally {
-      setTesting(false)
-    }
-  }
-
-  return (
-    <section className="panel settings-panel" style={{ marginTop: '20px' }}>
-      <div className="section-title">
-        <div>
-          <p className="eyebrow">HARDWARE & PERIPHERALS</p>
-          <h2>Thermal Printer (ESC/POS)</h2>
-          <p className="page-description">Configure your receipt and kitchen order ticket (KOT) thermal printers.</p>
-        </div>
-      </div>
-      <form className="settings-form" onSubmit={handleSavePrinter}>
-        <label>
-          Printer device
-          {windowsPrinters.length > 0 ? (
-            <select
-              value={selectedPrinterName}
-              onChange={(e) => setSelectedPrinterName(e.target.value)}
-            >
-              <option value="">Select installed printer</option>
-              {windowsPrinters.map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-          ) : (
-            <input
-              value={selectedPrinterName}
-              onChange={(e) => setSelectedPrinterName(e.target.value)}
-              placeholder="e.g. POS-80 or EPSON TM-T20"
-            />
-          )}
-          <small>Detected Windows printers list or manual driver name.</small>
-        </label>
-
-        <label>
-          Connection type
-          <select value={connectionType} onChange={(e) => setConnectionType(e.target.value)}>
-            <option value="driver">Windows Print Spooler (Driver)</option>
-            <option value="network">Network (Direct TCP/IP socket)</option>
-          </select>
-        </label>
-
-        {connectionType === 'network' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
-            <label>
-              IP Address
-              <input value={ipAddress} onChange={(e) => setIpAddress(e.target.value)} placeholder="192.168.1.100" />
-            </label>
-            <label>
-              Port
-              <input type="number" value={port} onChange={(e) => setPort(e.target.value)} />
-            </label>
-          </div>
-        )}
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-          <label>
-            Paper width
-            <select value={paperWidth} onChange={(e) => setPaperWidth(Number(e.target.value))}>
-              <option value={80}>80mm (Standard receipt - 42 cols)</option>
-              <option value={58}>58mm (Narrow thermal - 30 cols)</option>
-            </select>
-          </label>
-          <label>
-            Copies per print
-            <input
-              type="number"
-              min="1"
-              max="5"
-              value={copies}
-              onChange={(e) => setCopies(e.target.value)}
-            />
-          </label>
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '8px 0' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 500 }}>
-            <input
-              type="checkbox"
-              checked={autoPrint}
-              onChange={(e) => setAutoPrint(e.target.checked)}
-            />
-            <span>Auto-print customer receipt upon creating an order</span>
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 500 }}>
-            <input
-              type="checkbox"
-              checked={autoPrintKot}
-              onChange={(e) => setAutoPrintKot(e.target.checked)}
-            />
-            <span>Auto-print Kitchen Order Ticket (KOT) to kitchen upon creating an order</span>
-          </label>
-        </div>
-
-        <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-          <button className="button button-primary" type="submit" disabled={busy}>
-            {busy ? 'Saving…' : 'Save printer settings'}
-          </button>
-          <button
-            className="button button-subtle"
-            type="button"
-            onClick={handleTestPrint}
-            disabled={testing || !selectedPrinterName}
-          >
-            <Printer size={16} />
-            {testing ? 'Testing…' : 'Test Print'}
-          </button>
-        </div>
-      </form>
-    </section>
-  )
-}
-
-function BackupRestoreSection() {
-  const [backups, setBackups] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [creating, setCreating] = useState(false)
-  const [restoring, setRestoring] = useState(false)
-
-  async function loadBackups() {
-    if (!window.posApi?.backup) return
-    setLoading(true)
-    try {
-      const res = await window.posApi.backup.list()
-      if (res?.success) setBackups(res.data || [])
-    } catch (err) {
-      console.error('[Backup list error]', err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadBackups()
-  }, [])
-
-  async function handleBackupNow() {
-    setCreating(true)
-    try {
-      const res = await window.posApi.backup.create('manual')
-      if (res?.success) {
-        toast.success(`Backup created: ${res.data?.filename || 'Database snapshot saved.'}`)
-        loadBackups()
-      } else {
-        toast.error(`Backup failed: ${res?.error}`)
-      }
-    } catch (err) {
-      toast.error(friendlyError(err))
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  async function handleRestore(filename) {
-    const confirmed = window.confirm(
-      `Are you sure you want to restore the database from "${filename}"?\n\nA safety backup of your current database will be created automatically before restoring.`
-    )
-    if (!confirmed) return
-
-    setRestoring(true)
-    try {
-      const res = await window.posApi.backup.restore(filename)
-      if (res?.success) {
-        toast.success('Database restored successfully! Application reloaded.')
-        loadBackups()
-      } else {
-        toast.error(`Restore failed: ${res?.error}`)
-      }
-    } catch (err) {
-      toast.error(friendlyError(err))
-    } finally {
-      setRestoring(false)
-    }
-  }
-
-  function formatBytes(bytes) {
-    if (!bytes || bytes === 0) return '0 B'
-    const k = 1024
-    const sizes = ['B', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
-  }
-
-  const lastBackup = backups[0]
-
-  return (
-    <section className="panel settings-panel" style={{ marginTop: '20px' }}>
-      <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
-          <p className="eyebrow">DATA SAFETY & BACKUPS</p>
-          <h2>Database Backup & Restore</h2>
-          <p className="page-description">
-            ACID-consistent point-in-time SQLite backups. Stored securely in your system AppData directory.
-          </p>
-          {lastBackup && (
-            <p style={{ fontSize: '12px', color: '#10b981', marginTop: '4px' }}>
-              ✓ Last backup: {new Date(lastBackup.createdAt).toLocaleString()} ({formatBytes(lastBackup.sizeBytes)})
-            </p>
-          )}
-        </div>
-        <button
-          className="button button-primary"
-          type="button"
-          onClick={handleBackupNow}
-          disabled={creating || restoring}
-        >
-          <Database size={16} />
-          {creating ? 'Creating backup…' : 'Backup now'}
-        </button>
-      </div>
-
-      <div style={{ marginTop: '16px' }}>
-        <h3>Saved Backups ({backups.length})</h3>
-        {loading ? (
-          <p style={{ color: '#888', fontSize: '13px' }}>Loading backups list…</p>
-        ) : backups.length === 0 ? (
-          <p style={{ color: '#888', fontSize: '13px' }}>No backups created yet. Click "Backup now" to create your first snapshot.</p>
-        ) : (
-          <div className="table-scroll" style={{ maxHeight: '280px', overflowY: 'auto' }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Created At</th>
-                  <th>Reason</th>
-                  <th>Filename</th>
-                  <th>Size</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {backups.map((b) => (
-                  <tr key={b.filename}>
-                    <td><strong>{new Date(b.createdAt).toLocaleString()}</strong></td>
-                    <td>
-                      <span className="status-pill" style={{ textTransform: 'capitalize' }}>
-                        {b.reason?.replace('_', ' ') || 'manual'}
-                      </span>
-                    </td>
-                    <td><small style={{ fontFamily: 'monospace' }}>{b.filename}</small></td>
-                    <td>{formatBytes(b.sizeBytes)}</td>
-                    <td>
-                      <button
-                        className="button button-small button-subtle"
-                        type="button"
-                        onClick={() => handleRestore(b.filename)}
-                        disabled={restoring || creating}
-                        title="Restore this backup"
-                      >
-                        <RotateCcw size={14} />
-                        Restore
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </section>
-  )
-}
-
-function UpdaterStatusSection() {
-  const [updateStatus, setUpdateStatus] = useState(null)
-  const [appInfo, setAppInfo] = useState(null)
-  const [checking, setChecking] = useState(false)
-  const [installing, setInstalling] = useState(false)
-
-  async function loadStatus() {
-    if (!window.posApi?.updater) return
-    try {
-      const [statusRes, infoRes] = await Promise.all([
-        window.posApi.updater.getStatus(),
-        window.posApi.system?.getInfo ? window.posApi.system.getInfo() : Promise.resolve(null),
-      ])
-      if (statusRes?.success) setUpdateStatus(statusRes.data)
-      if (infoRes) setAppInfo(infoRes)
-    } catch (err) {
-      console.error('[Updater status error]', err)
-    }
-  }
-
-  useEffect(() => {
-    loadStatus()
-  }, [])
-
-  async function handleCheckUpdates() {
-    setChecking(true)
-    try {
-      const res = await window.posApi.updater.checkNow()
-      if (res?.success) {
-        setUpdateStatus(res.data)
-        if (res.data?.status === 'not-available' || res.data?.status === 'idle') {
-          toast.success('Your app is up to date!')
-        } else if (res.data?.status === 'available') {
-          toast.info(`New version v${res.data?.version} found! Downloading…`)
-        }
-      } else {
-        toast.error(`Update check failed: ${res?.error}`)
-      }
-    } catch (err) {
-      toast.error(friendlyError(err))
-    } finally {
-      setChecking(false)
-    }
-  }
-
-  async function handleInstallNow() {
-    setInstalling(true)
-    try {
-      await window.posApi.updater.installNow()
-    } catch (err) {
-      toast.error(`Installation failed: ${friendlyError(err)}`)
-      setInstalling(false)
-    }
-  }
-
-  const currentVersion = appInfo?.appVersion || '1.0.0'
-  const isUpdateReady = updateStatus?.status === 'downloaded'
-
-  return (
-    <section className="panel settings-panel" style={{ marginTop: '20px' }}>
-      <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
-          <p className="eyebrow">APPLICATION UPDATES</p>
-          <h2>Software Updates</h2>
-          <p className="page-description">
-            RestaurantOS Desktop POS version <strong>v{currentVersion}</strong>.
-          </p>
-          <div style={{ marginTop: '6px', fontSize: '13px' }}>
-            {updateStatus?.status === 'downloading' ? (
-              <span style={{ color: '#f59e0b' }}>Downloading update… ({Math.round(updateStatus.progress || 0)}%)</span>
-            ) : isUpdateReady ? (
-              <span style={{ color: '#10b981', fontWeight: 600 }}>Update v{updateStatus.version} is downloaded and ready to install!</span>
-            ) : updateStatus?.status === 'checking' || checking ? (
-              <span style={{ color: '#3b82f6' }}>Checking for latest updates…</span>
-            ) : (
-              <span style={{ color: '#64748b' }}>App is running normally.</span>
-            )}
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          {isUpdateReady && (
-            <button
-              className="button button-primary"
-              type="button"
-              onClick={handleInstallNow}
-              disabled={installing}
-              style={{ background: '#10b981', borderColor: '#059669' }}
-            >
-              <RefreshCw size={16} />
-              {installing ? 'Restarting…' : 'Restart to update'}
-            </button>
-          )}
-          <button
-            className="button button-subtle"
-            type="button"
-            onClick={handleCheckUpdates}
-            disabled={checking || installing}
-          >
-            <RefreshCw size={16} className={checking ? 'spin' : ''} />
-            {checking ? 'Checking…' : 'Check for updates'}
-          </button>
-        </div>
-      </div>
-    </section>
-  )
-}
-
 function SettingsPage() {
   const { membership } = useAuth()
   const [settings, setSettings] = useState({ name: '', currency, taxRate: '0', paymentMethods: 'cash, card, digital' })
   const [busy, setBusy] = useState(false)
-  const isElectron = typeof window !== 'undefined' && Boolean(window.posApi?.isElectron)
-
   useEffect(() => {
     if (!membership?.restaurantId) return undefined
     return watchRecords(membership.restaurantId, 'settings', (records) => {
@@ -1534,7 +1062,6 @@ function SettingsPage() {
       if (config) setSettings({ name: config.name || '', currency: config.currency || currency, taxRate: String((config.taxRate || 0) * 100), paymentMethods: (config.paymentMethods || ['cash', 'card', 'digital']).join(', ') })
     }, () => {})
   }, [membership?.restaurantId])
-
   async function save(event) {
     event.preventDefault()
     const taxRate = Number(settings.taxRate) / 100
@@ -1550,29 +1077,7 @@ function SettingsPage() {
       toast.success('Restaurant settings saved.')
     } catch (problem) { toast.error(friendlyError(problem)) } finally { setBusy(false) }
   }
-
-  return (
-    <>
-      <PageHeading eyebrow="RESTAURANT PROFILE" title="Settings" description="Basic operating and receipt settings for this restaurant." />
-      <section className="panel settings-panel">
-        <form className="settings-form" onSubmit={save}>
-          <label>Restaurant name<input required value={settings.name} onChange={(event) => setSettings({ ...settings, name: event.target.value })} placeholder="Your restaurant" /></label>
-          <label>Currency<input value="PKR · Pakistani rupee" readOnly /></label>
-          <label>Sales tax rate (%)<input type="number" min="0" max="100" step="0.01" value={settings.taxRate} onChange={(event) => setSettings({ ...settings, taxRate: event.target.value })} /></label>
-          <label>Enabled payment methods<input value={settings.paymentMethods} onChange={(event) => setSettings({ ...settings, paymentMethods: event.target.value })} /><small>Comma-separated labels. Card entry here records payment only.</small></label>
-          <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</button>
-        </form>
-      </section>
-
-      {isElectron && (
-        <>
-          <PrinterSettingsSection restaurantId={membership?.restaurantId} />
-          <BackupRestoreSection />
-          <UpdaterStatusSection />
-        </>
-      )}
-    </>
-  )
+  return <><PageHeading eyebrow="RESTAURANT PROFILE" title="Settings" description="Basic operating and receipt settings for this restaurant." /><section className="panel settings-panel"><form className="settings-form" onSubmit={save}><label>Restaurant name<input required value={settings.name} onChange={(event) => setSettings({ ...settings, name: event.target.value })} placeholder="Your restaurant" /></label><label>Currency<input value="PKR · Pakistani rupee" readOnly /></label><label>Sales tax rate (%)<input type="number" min="0" max="100" step="0.01" value={settings.taxRate} onChange={(event) => setSettings({ ...settings, taxRate: event.target.value })} /></label><label>Enabled payment methods<input value={settings.paymentMethods} onChange={(event) => setSettings({ ...settings, paymentMethods: event.target.value })} /><small>Comma-separated labels. Card entry here records payment only.</small></label><button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</button></form></section></>
 }
 
 function AuditPage() {

@@ -104,72 +104,23 @@ export function AppLayout({ children }) {
             <strong>{pageNames[location.pathname] || 'Restaurant operations'}</strong>
           </div>
           <div className="topbar-right">
-            {typeof window !== 'undefined' && window.posApi?.isElectron ? (() => {
-              const isAuthReq = syncState.status === 'auth-required' || syncState.authRequired
-              const attentionCount = syncState.attentionCount || 0
-              const pendingCount = syncState.pendingCount || 0
-              const isSyncing = syncState.status === 'syncing'
-              const isOffline = !syncState.isOnline
-
-              let dotColor = '#10b981'
-              let label = 'Desktop POS · Synced'
-
-              if (isAuthReq) {
-                dotColor = '#ef4444'
-                label = 'Auth required · Reconnect'
-              } else if (attentionCount > 0) {
-                dotColor = '#f59e0b'
-                label = `${attentionCount} need attention`
-              } else if (isOffline) {
-                dotColor = '#94a3b8'
-                label = 'Offline POS · SQLite'
-              } else if (isSyncing) {
-                dotColor = '#f59e0b'
-                label = `Syncing (${pendingCount} pending)`
-              } else if (pendingCount > 0) {
-                dotColor = '#10b981'
-                label = `Pending Sync: ${pendingCount}`
-              }
-
-              const lastSyncStr = syncState.lastSyncTime
-                ? new Date(syncState.lastSyncTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : 'None yet'
-
-              const tooltip = [
-                `Status: ${syncState.status || (isOffline ? 'offline' : 'online')}`,
-                `Pending Sync: ${pendingCount}`,
-                attentionCount > 0 ? `Needs attention: ${attentionCount}` : null,
-                `Last Sync: ${lastSyncStr}`,
-                'Click to trigger sync manually',
-              ].filter(Boolean).join(' • ')
-
-              return (
-                <button
-                  type="button"
-                  className={`service-status ${isOffline ? 'offline-status' : isSyncing ? 'syncing-status' : 'desktop-status'}`}
-                  onClick={() => window.posApi?.sync?.trigger().catch(() => {})}
-                  title={tooltip}
-                  style={{
-                    cursor: 'pointer',
-                    background: isAuthReq ? 'rgba(239,68,68,0.1)' : 'rgba(255,255,255,0.04)',
-                    border: `1px solid ${isAuthReq ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.1)'}`,
-                    borderRadius: '9999px',
-                    padding: '4px 12px',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '12px',
-                    color: isAuthReq ? '#f87171' : 'inherit',
-                  }}
-                >
-                  <i style={{ width: '8px', height: '8px', borderRadius: '50%', display: 'inline-block', background: dotColor }} />
-                  <span>{label}</span>
-                  {syncState.lastSyncTime && !isOffline && !isAuthReq && attentionCount === 0 && pendingCount === 0 && (
-                    <small style={{ opacity: 0.6, fontSize: '11px', marginLeft: '2px' }}>({lastSyncStr})</small>
-                  )}
-                </button>
-              )
-            })() : (
+            {typeof window !== 'undefined' && window.posApi?.isElectron ? (
+              <button
+                className={`service-status ${!syncState.isOnline ? 'offline-status' : syncState.status === 'syncing' ? 'syncing-status' : 'desktop-status'}`}
+                onClick={() => window.posApi?.sync?.trigger().catch(() => {})}
+                title="Click to trigger sync"
+                style={{ cursor: 'pointer', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '9999px', padding: '4px 12px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              >
+                <i style={{ width: '8px', height: '8px', borderRadius: '50%', display: 'inline-block', background: !syncState.isOnline ? '#94a3b8' : syncState.status === 'syncing' ? '#f59e0b' : '#10b981' }} />
+                {!syncState.isOnline
+                  ? 'Offline POS · SQLite'
+                  : syncState.status === 'syncing'
+                  ? `Syncing (${syncState.pendingCount} pending)`
+                  : syncState.pendingCount > 0
+                  ? `Sync (${syncState.pendingCount} pending)`
+                  : 'Desktop POS · Synced'}
+              </button>
+            ) : (
               <span className={`service-status ${membership?.demo ? 'demo-status' : ''}`}><i /> {membership?.demo ? 'Demo · sample data' : 'Live workspace'}</span>
             )}
           </div>

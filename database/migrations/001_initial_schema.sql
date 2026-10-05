@@ -1,4 +1,75 @@
--- ============================================================
+RestaurantOS (Electron + SQLite + Firebase sync) ke review mein ye bugs/gaps mile hain. Inko ek-ek karke fix karo. Existing UI/design, web (Firebase) version, aur jo kaam kar raha hai usay mat todna. Sirf zaroori, minimal changes. Har fix ke baad test chalao (npm test, npm run test:electron, aur related headless tests), aur result report karo. Har group (A, B, C, D) ke baad ruko aur meri approval lo.
+
+SHURU KARNE SE PEHLE
+- Git branch banao (fix/review-bugs). Pehle sab pending changes commit karo.
+- Kuch bhi Firebase par deploy ya delete mat karna.
+
+GROUP A: SYNC KI RELIABILITY (sabse zaroori)
+
+A1. Firebase token expire hone ka masla
+- Abhi token sirf login par main process ko jata hai (src/context/AuthContext.jsx, onAuthStateChanged). ~1 ghante baad token expire ho jata hai aur sync ruk jata hai.
+- onIdTokenChanged use karo taake har token refresh par window.posApi.sync.setCredentials dobara call ho. Token ko main process mein expiry ke saath rakho.
+- Renderer window khuli ho tab tak har ~45 min mein token force refresh karke bhejo.
+- Agar token invalid ho (REST 401/403), to syncWorker status 'auth-required' dikhaye, queue pause kare aur retry_count BADHAYE NAHI. Naya token milte hi sync khud resume ho.
+
+A2. Retry logic (sync/syncWorker.cjs)
+- Abhi retry_count 5 hone par item hamesha ke liye skip ho jata hai. Isay badlo: failed items par time-based exponential backoff (e.g. 15s, 30s, 1m, 5m, max 15 min), lekin item kabhi permanently drop na ho. (sync_queue ka status CHECK constraint ('pending','syncing','synced','failed') hai, isay mat tod na. Backoff updated_at + retry_count se compute karo.)
+- Network errors aur 5xx par retry_count mat badhao jab tak actual rejection na ho. Validation/permission rejection (400/403 rules wali) ko 'failed' rakho aur last_error mein wajah likho, aur UI mein "N items need attention" dikhao.
+
+A3. Stuck 'syncing' items
+- App startup par sync_queue mein jo items 'syncing' status mein hon (app beech mein band hui) unhein 'pending' karo. Ye worker start hone se pehle ek baar ho.
+
+A4. Firestore rules aur sync payload verify karo
+- firestore.rules bohot strict hain (validOrder, validFinancial, orders par delete: false, wagera). Ye jaanchne ke liye emulator test likho (npm run test:rules wale setup ke saath): sync worker jo payload bhejta hai (firestoreRest.writeDoc/deleteDoc) wo har syncable collection par rules se pass hota hai ya nahi.
+- Jahan rules reject karein (e.g. orders/payments ka delete), wahan sync mein DELETE ke bajaye soft-delete (deletedAt ke saath update) bhejo, ya jo rules allow karein wahi operation use karo. Rules ko dheela mat karo bina mujhse poochhe; agar rules badalna zaroori ho to pehle mujhe batao.
+- Test: har collection ke liye create, update, delete sync (online) emulator ke against.
+
+GROUP B: OFFLINE LOGIN (requirement ka core hissa)
+
+B1. Abhi internet band ho to restart par login screen aati hai aur membership load nahi hoti (AuthContext sirf Firebase use karta hai). Fix:
+- Naya migration 00X (agla number) add karo: auth_cache table (uid, email, restaurant_id, role, permissions_json, password_hash, salt, kdf_params, last_online_login_at, failed_attempts, locked_until).
+- Online login kamyab hone par: password main process mein scrypt (Node crypto, per-user random salt, strong params) se hash karke cache karo. Plaintext password kabhi store ya log mat karo, aur sirf us ek IPC call mein jao jo hash karne ke liye zaroori hai.
+- Naye IPC channels (preload mein whitelisted): auth:cacheCredentials, auth:offlineLogin, auth:clearCache. Inputs validate karo.
+- Offline login: email + password ko cached hash se compare karo (timing-safe compare). 5 galat attempts par temporary lockout. Cache expiry (e.g. 30 din last online login se); expire hone par online login zaroori. Jab internet wapas aaye to background mein Firebase se membership/role dobara verify karo, aur agar user inactive/removed ho to cache hata kar logout karo.
+- AuthContext: Electron mein agar Firebase unreachable ho to offline login path use karo; web version ka behavior bilkul na badle. Roles (owner/manager/cashier/waiter) aur permissions cache se wahi rahein.
+- Restart par bhi session restore ho (internet band ho tab bhi) via secure local session (expiry ke saath). Session token plaintext password na ho.
+- Tests: internet OFF + restart + login; galat password; lockout; expiry; role cache.
+
+GROUP C: UI WIRING (ESC/POS, reports, backup abhi UI se connect nahi)
+
+C1. Receipt printing: src/components/ReceiptDialog.jsx abhi window.print() use karta hai.
+- Electron mein: window.posApi.print.receipt(...) use karo (printing/ aur electron/ipc/printIpc.cjs pehle se bane hain). Browser (web) mein window.print() fallback rahe. Print UI ko block na kare, error par clear message dikhao, order data safe rahe.
+- Auto-print option aur KOT (kot) printing bhi settings ke mutabiq wire karo.
+
+C2. Printer settings screen (existing Settings/Operations page ke andar, UI style wahi): printer name (Windows printers list se), paper width 58/80mm, copies, auto print, font/character settings, Test Print button. Print IPC se jo available hai wahi use karo.
+
+C3. Reports: existing reports screen ko Electron mein posApi.reports.* (SQLite) se chalao, taake Firebase query ka wait na ho. Web mein purana behavior.
+
+C4. Backup/Restore UI: Settings mein "Backup now", backups ki list, "Restore" (confirm dialog ke saath, pehle current DB ka auto backup), aur last backup time. Updater ka status (version, update available, "Restart to update" button) bhi dikhao. Ye sab posApi.backup.* aur posApi.updater.* se.
+
+C5. Online/Offline/Syncing/Synced indicator (AppLayout.jsx) mein "Last Sync" aur "Pending Sync" dikhana verify karo, aur naye states bhi: 'auth-required' aur "N need attention".
+
+GROUP D: CHHOTE FIXES
+
+D1. database/migrations/005_test_feature_column.sql ek test migration hai (settings.loyalty_points_enabled). Isay DELETE karo (abhi koi release nahi hui). Note: development machine ka DB agar v5 par hai to naye app mein "database newer than app" error aayega, isliye README mein likho ke dev DB (userData/database/restaurantos.db) delete karni hogi. Test files jo is column ko refer karti hon unhein update karo. Naye migrations ka numbering fix rahe (purani files edit nahi, hamesha nayi add).
+
+D2. Migration safety (database/migrations/runner.cjs):
+- Pre-migration backup fail ho to migration ABORT karo (sirf warning nahi), siwaye jab DB bilkul naya/khali ho (version 0).
+- Migration fail ho to user ko dialog.showErrorBox se clear message dikhao (electron/main.cjs mein getDb() ko try/catch mein lapeto), aur app safe tareeqe se band ho. DB touch na ho.
+
+D3. electron/main.cjs: getDb() ka unused variable hatao, startup errors handle karo. will-navigate par external navigation block karo, aur ek strict Content-Security-Policy set karo jo Firebase Auth/Firestore aur app ke liye zaroori domains allow kare (test karo ke login phir bhi chale).
+
+D4. electron/ipc/syncIpc.cjs mein 'sync:setMockOnline' test hook production mein register na ho (sirf jab NODE_ENV=test ya env flag ho). posIpc.cjs mein restaurantId ko dbIpc jaisa validate karo (regex), aur 'sync:setCredentials' ke inputs validate karo (types, lengths).
+
+D5. package.json build.publish: source repo private rahega. Releases ke liye alag PUBLIC repo use karo: owner MuhammadAbulubabaAttari2526, repo restaurantos-releases. App mein koi GitHub token embed mat karo. Publish sirf GH_TOKEN env variable se local machine par ho.
+
+D6. oxlint ke 15 warnings saaf karo (unused functions jaise genericRepository.cjs ka buildWhere), bina behavior badle.
+
+D7. README update: Windows par run/test/build/installer ke exact commands, dev DB reset ka tareeqa, release/publish ka process, aur .env.local ke baare mein note (kabhi commit/share na ho).
+
+END MEIN
+- Sab tests chalao: npm test, npm run test:electron, test-phase*-headless scripts, aur naye tests (token refresh, retry/backoff, stuck syncing reset, rules emulator, offline login, migration failure).
+- Final report do: kya fix hua, kaunsi file badli, kaun sa test pass/fail, aur jo kaam abhi bhi manual hardware testing maangta hai (thermal printer, Windows installer, update).-- ============================================================
 -- RestaurantOS Local SQLite Schema  v1
 -- Mirrors Firestore subcollection structure per restaurant.
 -- All monetary values in integer cents.

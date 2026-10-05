@@ -2,7 +2,7 @@
   "name": "restaurantos",
   "productName": "RestaurantOS",
   "version": "1.0.0",
-  "description": "RestaurantOS Professional Offline POS System",
+  "description": "Enterprise Offline-First Windows Desktop POS for Restaurants",
   "author": "RestaurantOS",
   "private": true,
   "type": "module",
@@ -13,7 +13,7 @@
     "npmRebuild": false,
     "asar": true,
     "asarUnpack": [
-      "**/*.node"
+      "**/node_modules/better-sqlite3/**/*"
     ],
     "directories": {
       "output": "dist-electron"
@@ -27,6 +27,7 @@
       "reports/**/*",
       "backup/**/*",
       "updater/**/*",
+      "node_modules/better-sqlite3/**/*",
       "package.json"
     ],
     "publish": [

@@ -5,6 +5,7 @@ import { SignupPage } from './pages/SignupPage.jsx'
 import { JoinPage } from './pages/JoinPage.jsx'
 import { AppLayout } from './components/layout/AppLayout.jsx'
 import { OperationsPage } from './pages/OperationsPage.jsx'
+import { UpdateNotifier } from './components/UpdateNotifier.jsx'
 import './demo-mode.css'
 
 function ProtectedRoute({ children }) {
@@ -21,13 +22,16 @@ export default function App() {
     owner: '/dashboard', manager: '/dashboard', cashier: '/pos', waiter: '/pos',
   }[membership?.role] || '/login'
   return (
-    <Routes>
-      <Route path="/login" element={user && membership ? <Navigate to={home} replace /> : user ? <Navigate to="/signup" replace /> : <LoginPage />} />
-      <Route path="/signup" element={user && membership ? <Navigate to={home} replace /> : <SignupPage />} />
-      <Route path="/join/:restaurantId/:invitationId" element={<JoinPage />} />
-      <Route path="/kitchen" element={<ProtectedRoute><Navigate to="/orders" replace /></ProtectedRoute>} />
-      <Route path="/" element={<Navigate to={user ? home : '/login'} replace />} />
-      <Route path="/*" element={<ProtectedRoute><AppLayout><OperationsPage /></AppLayout></ProtectedRoute>} />
-    </Routes>
+    <>
+      <UpdateNotifier />
+      <Routes>
+        <Route path="/login" element={user && membership ? <Navigate to={home} replace /> : user ? <Navigate to="/signup" replace /> : <LoginPage />} />
+        <Route path="/signup" element={user && membership ? <Navigate to={home} replace /> : <SignupPage />} />
+        <Route path="/join/:restaurantId/:invitationId" element={<JoinPage />} />
+        <Route path="/kitchen" element={<ProtectedRoute><Navigate to="/orders" replace /></ProtectedRoute>} />
+        <Route path="/" element={<Navigate to={user ? home : '/login'} replace />} />
+        <Route path="/*" element={<ProtectedRoute><AppLayout><OperationsPage /></AppLayout></ProtectedRoute>} />
+      </Routes>
+    </>
   )
 }

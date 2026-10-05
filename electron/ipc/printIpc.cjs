@@ -67,38 +67,23 @@ function registerPrintIpc() {
 
   /**
    * Print customer receipt
-  /**
-   * Print customer receipt
-   * payload: { restaurantId, orderId, printerId?, order?, openCashDrawer? }
+   * payload: { restaurantId, orderId, printerId? }
    */
   ipcMain.handle('print:receipt', async (_, payload) => {
-    const { restaurantId, orderId, printerId, openCashDrawer = false, order: passedOrder } = payload || {}
-    const restId = restaurantId || passedOrder?.restaurantId || passedOrder?.restaurant_id
-    const ordId = orderId || passedOrder?.id
-    if (!restId || !ordId) throw new Error('restaurantId and orderId are required')
+    const { restaurantId, orderId, printerId, openCashDrawer = false } = payload || {}
+    if (!restaurantId || !orderId) throw new Error('restaurantId and orderId are required')
 
-    const order = passedOrder || genericRepository.getById(restId, 'orders', ordId)
+    const order    = genericRepository.getById(restaurantId, 'orders', orderId)
     if (!order) throw new Error('Order not found')
 
-    let financial = ordId ? genericRepository.getById(restId, 'orderFinancials', ordId) : null
-    if (!financial) {
-      financial = {
-        subtotalCents: order.subtotalCents || 0,
-        discountCents: order.discountCents || 0,
-        taxCents: order.taxCents || 0,
-        totalCents: order.totalCents || 0,
-        paidCents: order.paidCents || 0,
-        refundedCents: order.refundedCents || 0,
-        paymentStatus: order.paymentStatus || (order.paidCents >= order.totalCents ? 'paid' : 'unpaid'),
-      }
-    }
-    const payments = ordId ? genericRepository.query(restId, 'payments', [['orderId', '==', ordId]], 50) : []
-    const settingsList = genericRepository.query(restId, 'settings', [], 5)
-    const settings = (settingsList.find((s) => s.id === 'profile') || settingsList[0] || {})
+    const financial = genericRepository.getById(restaurantId, 'orderFinancials', orderId)
+    const payments  = genericRepository.query(restaurantId, 'payments', [['orderId', '==', orderId]], 50)
+    const settingsList = genericRepository.query(restaurantId, 'settings', [], 5)
+    const settings  = (settingsList.find((s) => s.id === 'profile') || settingsList[0] || {})
 
-    const printer = printerId
-      ? getPrinterById(restId, printerId) || getDefaultPrinter(restId)
-      : getDefaultPrinter(restId)
+    const printer   = printerId
+      ? getPrinterById(restaurantId, printerId) || getDefaultPrinter(restaurantId)
+      : getDefaultPrinter(restaurantId)
     if (!printer) throw new Error('No printer configured. Please add a printer in Settings.')
 
     const buf = formatReceipt({
@@ -116,21 +101,19 @@ function registerPrintIpc() {
 
   /**
    * Print KOT (Kitchen Order Ticket)
-   * payload: { restaurantId, orderId, printerId?, order?, kotLabel? }
+   * payload: { restaurantId, orderId, printerId? }
    */
   ipcMain.handle('print:kot', async (_, payload) => {
-    const { restaurantId, orderId, printerId, kotLabel, order: passedOrder } = payload || {}
-    const restId = restaurantId || passedOrder?.restaurantId || passedOrder?.restaurant_id
-    const ordId = orderId || passedOrder?.id
-    if (!restId || !ordId) throw new Error('restaurantId and orderId are required')
+    const { restaurantId, orderId, printerId, kotLabel } = payload || {}
+    if (!restaurantId || !orderId) throw new Error('restaurantId and orderId are required')
 
-    const order = passedOrder || genericRepository.getById(restId, 'orders', ordId)
+    const order = genericRepository.getById(restaurantId, 'orders', orderId)
     if (!order) throw new Error('Order not found')
 
     const printer = printerId
-      ? getPrinterById(restId, printerId) || getDefaultPrinter(restId)
-      : getDefaultPrinter(restId)
-    if (!printer) throw new Error('No printer configured. Please add a printer in Settings.')
+      ? getPrinterById(restaurantId, printerId) || getDefaultPrinter(restaurantId)
+      : getDefaultPrinter(restaurantId)
+    if (!printer) throw new Error('No printer configured.')
 
     const buf = formatKot({
       order,
