@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react'
-import { BadgeCheck, ChefHat, Printer, ReceiptText, Utensils, X } from 'lucide-react'
+import { useState } from 'react'
+import { AlertCircle, BadgeCheck, CheckCircle2, CookingPot, Printer, ReceiptText, Utensils, X } from 'lucide-react'
 import { formatMoney, normalizeCurrency } from '../utils/domain.js'
 import './receipt.css'
 
@@ -15,15 +15,7 @@ function money(cents, currency) {
   return formatMoney(cents, currency)
 }
 
-const isElectron = typeof window !== 'undefined' && Boolean(window.posApi?.isElectron)
-
-export function ReceiptDialog({
-  order,
-  restaurantName = 'Restaurant',
-  currency = 'PKR',
-  restaurantId,
-  onClose,
-}) {
+export function ReceiptDialog({ order, restaurantName = 'Restaurant', currency = 'PKR', restaurantId, onClose }) {
   const currencyCode = normalizeCurrency(currency)
   const lines = order.items || []
   const totalCents = Number(order.totalCents || 0)
@@ -32,54 +24,83 @@ export function ReceiptDialog({
   const balanceCents = Math.max(0, totalCents - paidCents)
   const paymentLabel = refundedCents > 0 ? 'Refund recorded' : balanceCents === 0 ? 'Paid in full' : paidCents > 0 ? 'Partially paid' : 'Payment due'
 
-  const [printing, setPrinting] = useState(false)
+  const [printingReceipt, setPrintingReceipt] = useState(false)
+  const [printingKot, setPrintingKot] = useState(false)
+  const [printStatus, setPrintStatus] = useState(null)
   const [printError, setPrintError] = useState(null)
-  const [printDone, setPrintDone] = useState(false)
 
-  // C1: Electron uses IPC thermal print; web falls back to window.print()
-  const handlePrint = useCallback(async () => {
-    setPrintError(null)
-    if (isElectron && window.posApi?.print?.receipt && restaurantId && order.id) {
-      setPrinting(true)
-      try {
-        await window.posApi.print.receipt({ restaurantId, orderId: order.id })
-        setPrintDone(true)
-      } catch (err) {
-        setPrintError(err?.message || 'Printing failed. Check printer settings.')
-      } finally {
-        setPrinting(false)
-      }
-    } else {
-      // Web fallback
+  const isElectron = typeof window !== 'undefined' && Boolean(window.posApi?.print)
+  const targetRestaurantId = restaurantId || order.restaurantId || order.restaurant_id || (typeof window !== 'undefined' ? window.sessionStorage?.getItem('activeRestaurantId') : null)
+
+  async function handlePrintReceipt() {
+    if (!isElectron) {
       window.print()
+      return
     }
-  }, [restaurantId, order.id])
 
-  // C1: KOT print (kitchen order ticket)
-  const handleKot = useCallback(async () => {
-    if (!isElectron || !window.posApi?.print?.kot || !restaurantId || !order.id) return
+    setPrintingReceipt(true)
     setPrintError(null)
-    setPrinting(true)
+    setPrintStatus(null)
+
     try {
-      await window.posApi.print.kot({ restaurantId, orderId: order.id })
+      await window.posApi.print.receipt({
+        restaurantId: targetRestaurantId,
+        orderId: order.id,
+        order,
+      })
+      setPrintStatus('Receipt sent to printer successfully.')
     } catch (err) {
-      setPrintError(err?.message || 'KOT printing failed.')
+      console.error('[Receipt Print Error]', err)
+      setPrintError(err.message || 'Failed to print receipt. Please check printer configuration in Settings.')
     } finally {
-      setPrinting(false)
+      setPrintingReceipt(false)
     }
-  }, [restaurantId, order.id])
+  }
+
+  async function handlePrintKot() {
+    if (!isElectron) {
+      window.print()
+      return
+    }
+
+    setPrintingKot(true)
+    setPrintError(null)
+    setPrintStatus(null)
+
+    try {
+      await window.posApi.print.kot({
+        restaurantId: targetRestaurantId,
+        orderId: order.id,
+        order,
+      })
+      setPrintStatus('Kitchen Order Ticket (KOT) sent to kitchen printer.')
+    } catch (err) {
+      console.error('[KOT Print Error]', err)
+      setPrintError(err.message || 'Failed to print KOT. Please check printer configuration in Settings.')
+    } finally {
+      setPrintingKot(false)
+    }
+  }
 
   return (
     <div className="modal-backdrop receipt-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="modal-panel receipt-modal" role="dialog" aria-modal="true" aria-labelledby="receipt-title">
         <div className="receipt-preview-heading no-print">
-          <div><p className="eyebrow">RECEIPT PREVIEW</p><h2 id="receipt-title">{printDone ? 'Printed ✓' : 'Ready to print'}</h2></div>
+          <div><p className="eyebrow">RECEIPT PREVIEW</p><h2 id="receipt-title">Ready to print</h2></div>
           <button className="icon-button" onClick={onClose} aria-label="Close receipt"><X size={18} /></button>
         </div>
 
         {printError && (
-          <div className="inline-alert no-print" role="alert" style={{ margin: '0 0 12px', fontSize: '0.85rem' }}>
-            {printError}
+          <div className="receipt-print-banner receipt-print-error no-print" role="alert" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', borderRadius: '6px', background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: '13px', margin: '0 0 12px' }}>
+            <AlertCircle size={16} style={{ flexShrink: 0 }} />
+            <span>{printError}</span>
+          </div>
+        )}
+
+        {printStatus && (
+          <div className="receipt-print-banner receipt-print-success no-print" role="status" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', borderRadius: '6px', background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#047857', fontSize: '13px', margin: '0 0 12px' }}>
+            <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
+            <span>{printStatus}</span>
           </div>
         )}
 
@@ -134,27 +155,28 @@ export function ReceiptDialog({
           <footer className="receipt-footer"><span>Order {order.orderNumber || `#${order.id?.slice(0, 7)}`}</span><span>Thank you</span></footer>
         </article>
 
-        <div className="modal-actions no-print receipt-actions">
+        <div className="modal-actions no-print receipt-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <button className="button button-subtle" onClick={onClose}>Close</button>
-          {/* KOT button only shown in Electron when order has an id */}
-          {isElectron && order.id && restaurantId && (
+          {isElectron && (
             <button
-              id="btn-print-kot"
               className="button button-subtle"
-              onClick={handleKot}
-              disabled={printing}
-              title="Print kitchen order ticket"
+              type="button"
+              onClick={handlePrintKot}
+              disabled={printingKot || printingReceipt}
+              title="Print Kitchen Order Ticket to the kitchen printer"
             >
-              <ChefHat size={16} /> KOT
+              <CookingPot size={16} />
+              {printingKot ? 'Printing KOT…' : 'Print KOT'}
             </button>
           )}
           <button
-            id="btn-print-receipt"
             className="button button-primary"
-            onClick={handlePrint}
-            disabled={printing}
+            type="button"
+            onClick={handlePrintReceipt}
+            disabled={printingReceipt || printingKot}
           >
-            <Printer size={16} /> {printing ? 'Printing…' : 'Print receipt'}
+            <Printer size={16} />
+            {printingReceipt ? 'Printing…' : isElectron ? 'Print Receipt (ESC/POS)' : 'Print receipt'}
           </button>
         </div>
       </section>

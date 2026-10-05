@@ -4,8 +4,9 @@ import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  ArrowDownLeft, ArrowUpRight, Banknote, CalendarDays, CirclePlus, Clock3,
-  Minus, Plus, Printer, Search, Settings, ShoppingBag, Trash2, Utensils, Users,
+  ArrowDownLeft, ArrowUpRight, Banknote, CalendarDays, CheckCircle2, CirclePlus, Clock3,
+  Database, Download, HardDrive, Minus, Plus, Printer, RefreshCw, RotateCcw,
+  Search, Settings, ShoppingBag, Trash2, Utensils, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../context/useAuth.js'
@@ -305,8 +306,9 @@ function PosPage() {
       writePosDraft(draftStorageKey, { cart: [], orderType: 'direct-bill', tableId: '', covers: 1, customerId: '', note: '', discount: '', activeDraftId: null })
       toast.success('Order created.')
       const tableName = tables.find((table) => table.id === tableId)?.name || ''
-      setReceipt({
+      const receiptObj = {
         id: created?.orderId || requestId,
+        restaurantId: membership?.restaurantId,
         orderNumber: created?.orderNumber || `DB-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`,
         type: orderType,
         tableName,
@@ -333,7 +335,29 @@ function PosPage() {
             selectedAddOns: addOnNames.map((name) => ({ name })),
           }
         }),
-      })
+      }
+      setReceipt(receiptObj)
+
+      // Auto-print receipt and/or KOT if enabled on default printer
+      if (typeof window !== 'undefined' && window.posApi?.print && membership?.restaurantId) {
+        window.posApi.print.listPrinters(membership.restaurantId).then((printers) => {
+          const defPrinter = printers?.find((p) => p.is_default || p.isDefault) || printers?.[0]
+          if (defPrinter?.auto_print) {
+            window.posApi.print.receipt({
+              restaurantId: membership.restaurantId,
+              orderId: created?.orderId || requestId,
+              order: receiptObj,
+            }).catch((err) => console.warn('[Auto-print receipt failed]', err))
+          }
+          if (defPrinter?.auto_print_kot) {
+            window.posApi.print.kot({
+              restaurantId: membership.restaurantId,
+              orderId: created?.orderId || requestId,
+              order: receiptObj,
+            }).catch((err) => console.warn('[Auto-print KOT failed]', err))
+          }
+        }).catch(() => {})
+      }
       orderIntentIdRef.current = null
       resetStableIntentId(activeDraftId || 'pos-order')
       setCart([])
@@ -1051,218 +1075,448 @@ function StaffPermissionsDialog({ staff, busy, onClose, onSave }) {
   return <div className="modal-backdrop" role="presentation"><section className="modal-panel permission-dialog" role="dialog" aria-modal="true" aria-labelledby="permission-title"><div className="modal-heading permission-header"><div><p className="eyebrow">{staff.role.toUpperCase()} ACCESS</p><h2 id="permission-title">{staff.displayName || staff.email}</h2></div><button className="icon-button" aria-label="Close" onClick={onClose}>×</button></div><fieldset className="permission-list"><legend>Additional permissions</legend>{options.map((option) => <label className="permission-option" key={option.id}><input type="checkbox" checked={selected.includes(option.id)} onChange={() => toggle(option.id)} /><span>{option.label}</span></label>)}</fieldset><div className="modal-actions permission-actions"><button className="button button-subtle" onClick={onClose}>Cancel</button><button className="button button-primary" onClick={() => onSave(selected)} disabled={busy}>{busy ? 'Saving…' : 'Save permissions'}</button></div></section></div>
 }
 
-// C4: Printer Settings panel (Electron only)
-function PrinterSettingsPanel() {
-  const { membership } = useAuth()
-  const rid = membership?.restaurantId
+function PrinterSettingsSection({ restaurantId }) {
   const [printers, setPrinters] = useState([])
   const [windowsPrinters, setWindowsPrinters] = useState([])
-  const [form, setForm] = useState({ name: '', connection_type: 'driver', ip_address: '', paper_width: '80', copies: '1', auto_print: '0', is_default: '1' })
-  const [saving, setSaving] = useState(false)
+  const [selectedPrinterName, setSelectedPrinterName] = useState('')
+  const [paperWidth, setPaperWidth] = useState(80)
+  const [copies, setCopies] = useState(1)
+  const [autoPrint, setAutoPrint] = useState(false)
+  const [autoPrintKot, setAutoPrintKot] = useState(false)
+  const [connectionType, setConnectionType] = useState('driver')
+  const [ipAddress, setIpAddress] = useState('')
+  const [port, setPort] = useState(9100)
+  const [busy, setBusy] = useState(false)
   const [testing, setTesting] = useState(false)
-  const [selectedPrinterForTest, setSelectedPrinterForTest] = useState('')
 
   useEffect(() => {
-    if (!rid || !window.posApi?.print) return
-    window.posApi.print.listPrinters(rid).then(setPrinters).catch(() => {})
-    window.posApi.print.listWindowsPrinters().then(setWindowsPrinters).catch(() => {})
-  }, [rid])
+    if (!window.posApi?.print || !restaurantId) return
+    window.posApi.print.listWindowsPrinters().then((names) => {
+      setWindowsPrinters(names || [])
+    }).catch(() => {})
 
-  async function savePrinter(event) {
+    window.posApi.print.listPrinters(restaurantId).then((records) => {
+      setPrinters(records || [])
+      const def = records?.find((p) => p.is_default || p.isDefault) || records?.[0]
+      if (def) {
+        setSelectedPrinterName(def.name || '')
+        setPaperWidth(def.paper_width || def.paperWidth || 80)
+        setCopies(def.copies || 1)
+        setAutoPrint(Boolean(def.auto_print || def.autoPrint))
+        setAutoPrintKot(Boolean(def.auto_print_kot || def.autoPrintKot))
+        setConnectionType(def.connection_type || def.connectionType || 'driver')
+        setIpAddress(def.ip_address || def.ipAddress || '')
+        setPort(def.port || 9100)
+      }
+    }).catch(() => {})
+  }, [restaurantId])
+
+  async function handleSavePrinter(event) {
     event.preventDefault()
-    if (!rid) return
-    setSaving(true)
+    if (!selectedPrinterName?.trim()) {
+      return toast.error('Please select or specify a printer name.')
+    }
+    setBusy(true)
     try {
-      await window.posApi.db.upsert(rid, 'printers', {
-        name: form.name.trim(),
-        connection_type: form.connection_type,
-        ip_address: form.ip_address.trim(),
-        port: 9100,
-        paper_width: Number(form.paper_width),
-        copies: Math.max(1, Number(form.copies)),
-        auto_print: form.auto_print === '1' ? 1 : 0,
+      const printerId = printers[0]?.id || 'default-printer'
+      const payload = {
+        name: selectedPrinterName.trim(),
+        connection_type: connectionType,
+        ip_address: ipAddress.trim(),
+        port: Number(port) || 9100,
+        paper_width: Number(paperWidth) === 58 ? 58 : 80,
+        copies: Math.max(1, Math.min(5, Number(copies) || 1)),
+        auto_print: autoPrint ? 1 : 0,
+        auto_print_kot: autoPrintKot ? 1 : 0,
         is_default: 1,
-      })
-      toast.success('Printer saved.')
-      window.posApi.print.listPrinters(rid).then(setPrinters).catch(() => {})
-    } catch (err) { toast.error(err?.message || 'Could not save printer.') } finally { setSaving(false) }
+      }
+      await window.posApi.db.upsert(restaurantId, 'printers', payload, printerId)
+      toast.success('Thermal printer settings saved.')
+      const refreshed = await window.posApi.print.listPrinters(restaurantId)
+      setPrinters(refreshed || [])
+    } catch (err) {
+      toast.error(friendlyError(err))
+    } finally {
+      setBusy(false)
+    }
   }
 
-  async function testPrint(printerId) {
-    if (!rid) return
+  async function handleTestPrint() {
     setTesting(true)
     try {
-      await window.posApi.print.test({ restaurantId: rid, printerId })
-      toast.success('Test page sent!')
-    } catch (err) { toast.error(err?.message || 'Test print failed.') } finally { setTesting(false) }
+      await window.posApi.print.test({ restaurantId })
+      toast.success('Test print sent to printer!')
+    } catch (err) {
+      toast.error(`Test print failed: ${friendlyError(err)}`)
+    } finally {
+      setTesting(false)
+    }
   }
 
   return (
-    <section className="panel settings-panel">
-      <div className="section-title"><h2>Printer settings</h2></div>
-      <form className="settings-form" onSubmit={savePrinter}>
-        <label>Printer name
-          {windowsPrinters.length > 0
-            ? <select value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required>
-                <option value="">Select a printer</option>
-                {windowsPrinters.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
-            : <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Printer name" />}
-        </label>
-        <label>Connection type
-          <select value={form.connection_type} onChange={(e) => setForm({ ...form, connection_type: e.target.value })}>
-            <option value="driver">Windows driver (recommended)</option>
-            <option value="network">Network / IP</option>
-            <option value="usb">USB raw</option>
-          </select>
-        </label>
-        {form.connection_type === 'network' && (
-          <label>IP address<input value={form.ip_address} onChange={(e) => setForm({ ...form, ip_address: e.target.value })} placeholder="192.168.1.100" /></label>
-        )}
-        <label>Paper width
-          <select value={form.paper_width} onChange={(e) => setForm({ ...form, paper_width: e.target.value })}>
-            <option value="80">80 mm</option>
-            <option value="58">58 mm</option>
-          </select>
-        </label>
-        <label>Copies<input type="number" min="1" max="5" value={form.copies} onChange={(e) => setForm({ ...form, copies: e.target.value })} /></label>
-        <label>Auto-print on order creation
-          <select value={form.auto_print} onChange={(e) => setForm({ ...form, auto_print: e.target.value })}>
-            <option value="0">Disabled</option>
-            <option value="1">Enabled</option>
-          </select>
-        </label>
-        <button className="button button-primary" disabled={saving}>{saving ? 'Saving…' : 'Save printer'}</button>
-      </form>
-      {printers.length > 0 && (
-        <div style={{ marginTop: '16px' }}>
-          <strong style={{ fontSize: '0.85rem', opacity: 0.7 }}>Configured printers</strong>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
-            {printers.map((p) => (
-              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: '8px' }}>
-                <span style={{ flex: 1 }}><strong>{p.name}</strong> · {p.paper_width}mm · {p.connection_type}</span>
-                <button
-                  id={`btn-test-print-${p.id}`}
-                  className="button button-small button-subtle"
-                  onClick={() => testPrint(p.id)}
-                  disabled={testing}
-                >{testing ? '…' : 'Test Print'}</button>
-              </div>
-            ))}
-          </div>
+    <section className="panel settings-panel" style={{ marginTop: '20px' }}>
+      <div className="section-title">
+        <div>
+          <p className="eyebrow">HARDWARE & PERIPHERALS</p>
+          <h2>Thermal Printer (ESC/POS)</h2>
+          <p className="page-description">Configure your receipt and kitchen order ticket (KOT) thermal printers.</p>
         </div>
-      )}
+      </div>
+      <form className="settings-form" onSubmit={handleSavePrinter}>
+        <label>
+          Printer device
+          {windowsPrinters.length > 0 ? (
+            <select
+              value={selectedPrinterName}
+              onChange={(e) => setSelectedPrinterName(e.target.value)}
+            >
+              <option value="">Select installed printer</option>
+              {windowsPrinters.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={selectedPrinterName}
+              onChange={(e) => setSelectedPrinterName(e.target.value)}
+              placeholder="e.g. POS-80 or EPSON TM-T20"
+            />
+          )}
+          <small>Detected Windows printers list or manual driver name.</small>
+        </label>
+
+        <label>
+          Connection type
+          <select value={connectionType} onChange={(e) => setConnectionType(e.target.value)}>
+            <option value="driver">Windows Print Spooler (Driver)</option>
+            <option value="network">Network (Direct TCP/IP socket)</option>
+          </select>
+        </label>
+
+        {connectionType === 'network' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
+            <label>
+              IP Address
+              <input value={ipAddress} onChange={(e) => setIpAddress(e.target.value)} placeholder="192.168.1.100" />
+            </label>
+            <label>
+              Port
+              <input type="number" value={port} onChange={(e) => setPort(e.target.value)} />
+            </label>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <label>
+            Paper width
+            <select value={paperWidth} onChange={(e) => setPaperWidth(Number(e.target.value))}>
+              <option value={80}>80mm (Standard receipt - 42 cols)</option>
+              <option value={58}>58mm (Narrow thermal - 30 cols)</option>
+            </select>
+          </label>
+          <label>
+            Copies per print
+            <input
+              type="number"
+              min="1"
+              max="5"
+              value={copies}
+              onChange={(e) => setCopies(e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '8px 0' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 500 }}>
+            <input
+              type="checkbox"
+              checked={autoPrint}
+              onChange={(e) => setAutoPrint(e.target.checked)}
+            />
+            <span>Auto-print customer receipt upon creating an order</span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 500 }}>
+            <input
+              type="checkbox"
+              checked={autoPrintKot}
+              onChange={(e) => setAutoPrintKot(e.target.checked)}
+            />
+            <span>Auto-print Kitchen Order Ticket (KOT) to kitchen upon creating an order</span>
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+          <button className="button button-primary" type="submit" disabled={busy}>
+            {busy ? 'Saving…' : 'Save printer settings'}
+          </button>
+          <button
+            className="button button-subtle"
+            type="button"
+            onClick={handleTestPrint}
+            disabled={testing || !selectedPrinterName}
+          >
+            <Printer size={16} />
+            {testing ? 'Testing…' : 'Test Print'}
+          </button>
+        </div>
+      </form>
     </section>
   )
 }
 
-// C4: Backup/Restore + Updater UI (Electron only)
-function BackupRestorePanel() {
+function BackupRestoreSection() {
   const [backups, setBackups] = useState([])
-  const [busyCreate, setBusyCreate] = useState(false)
-  const [busyRestore, setBusyRestore] = useState('')
-  const [updaterStatus, setUpdaterStatus] = useState(null)
-  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [restoring, setRestoring] = useState(false)
 
-  function refreshBackups() {
+  async function loadBackups() {
     if (!window.posApi?.backup) return
-    window.posApi.backup.list().then((res) => { if (res.success) setBackups(res.data || []) }).catch(() => {})
+    setLoading(true)
+    try {
+      const res = await window.posApi.backup.list()
+      if (res?.success) setBackups(res.data || [])
+    } catch (err) {
+      console.error('[Backup list error]', err)
+    } finally {
+      setLoading(false)
+    }
   }
 
-  function refreshUpdater() {
-    if (!window.posApi?.updater) return
-    window.posApi.updater.getStatus().then((res) => { if (res.success) setUpdaterStatus(res.data) }).catch(() => {})
-  }
+  useEffect(() => {
+    loadBackups()
+  }, [])
 
-  useEffect(() => { refreshBackups(); refreshUpdater() }, [])
-
-  async function createBackup() {
-    setBusyCreate(true)
+  async function handleBackupNow() {
+    setCreating(true)
     try {
       const res = await window.posApi.backup.create('manual')
-      if (res.success) { toast.success('Backup created.'); refreshBackups() }
-      else toast.error(res.error || 'Backup failed.')
-    } catch (err) { toast.error(err?.message || 'Backup failed.') } finally { setBusyCreate(false) }
+      if (res?.success) {
+        toast.success(`Backup created: ${res.data?.filename || 'Database snapshot saved.'}`)
+        loadBackups()
+      } else {
+        toast.error(`Backup failed: ${res?.error}`)
+      }
+    } catch (err) {
+      toast.error(friendlyError(err))
+    } finally {
+      setCreating(false)
+    }
   }
 
-  async function restoreBackup(filename) {
-    if (!window.confirm(`Restore from ${filename}? Current data will be backed up first, then replaced. The app will need to restart.`)) return
-    setBusyRestore(filename)
+  async function handleRestore(filename) {
+    const confirmed = window.confirm(
+      `Are you sure you want to restore the database from "${filename}"?\n\nA safety backup of your current database will be created automatically before restoring.`
+    )
+    if (!confirmed) return
+
+    setRestoring(true)
     try {
       const res = await window.posApi.backup.restore(filename)
-      if (res.success) toast.success('Restored. Please restart the app.')
-      else toast.error(res.error || 'Restore failed.')
-    } catch (err) { toast.error(err?.message || 'Restore failed.') } finally { setBusyRestore('') }
+      if (res?.success) {
+        toast.success('Database restored successfully! Application reloaded.')
+        loadBackups()
+      } else {
+        toast.error(`Restore failed: ${res?.error}`)
+      }
+    } catch (err) {
+      toast.error(friendlyError(err))
+    } finally {
+      setRestoring(false)
+    }
   }
 
-  async function checkUpdate() {
-    setCheckingUpdate(true)
-    try {
-      const res = await window.posApi.updater.checkNow()
-      if (res.success) setUpdaterStatus(res.data)
-    } catch (err) { toast.error(err?.message || 'Update check failed.') } finally { setCheckingUpdate(false) }
+  function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B'
+    const k = 1024
+    const sizes = ['B', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
   }
 
-  async function installUpdate() {
-    try { await window.posApi.updater.installNow() } catch (err) { toast.error(err?.message || 'Install failed.') }
-  }
+  const lastBackup = backups[0]
 
   return (
-    <section className="panel settings-panel">
-      <div className="section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h2>Data backup</h2>
-        <button id="btn-backup-now" className="button button-subtle" onClick={createBackup} disabled={busyCreate}>{busyCreate ? 'Backing up…' : 'Backup now'}</button>
-      </div>
-      {backups.length === 0 ? (
-        <p style={{ opacity: 0.6, fontSize: '0.875rem' }}>No backups yet. Click "Backup now" to create one.</p>
-      ) : (
-        <div className="table-scroll" style={{ marginTop: '8px' }}>
-          <table>
-            <thead><tr><th>File</th><th>Size</th><th>Date</th><th></th></tr></thead>
-            <tbody>
-              {backups.map((b) => (
-                <tr key={b.filename}>
-                  <td><code style={{ fontSize: '0.8rem' }}>{b.filename}</code></td>
-                  <td>{b.sizeKb ? `${b.sizeKb} KB` : '—'}</td>
-                  <td>{b.createdAt ? new Date(b.createdAt).toLocaleString() : '—'}</td>
-                  <td>
-                    <button
-                      id={`btn-restore-${b.filename}`}
-                      className="button button-small button-subtle"
-                      disabled={!!busyRestore}
-                      onClick={() => restoreBackup(b.filename)}
-                    >{busyRestore === b.filename ? 'Restoring…' : 'Restore'}</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <section className="panel settings-panel" style={{ marginTop: '20px' }}>
+      <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <p className="eyebrow">DATA SAFETY & BACKUPS</p>
+          <h2>Database Backup & Restore</h2>
+          <p className="page-description">
+            ACID-consistent point-in-time SQLite backups. Stored securely in your system AppData directory.
+          </p>
+          {lastBackup && (
+            <p style={{ fontSize: '12px', color: '#10b981', marginTop: '4px' }}>
+              ✓ Last backup: {new Date(lastBackup.createdAt).toLocaleString()} ({formatBytes(lastBackup.sizeBytes)})
+            </p>
+          )}
         </div>
-      )}
+        <button
+          className="button button-primary"
+          type="button"
+          onClick={handleBackupNow}
+          disabled={creating || restoring}
+        >
+          <Database size={16} />
+          {creating ? 'Creating backup…' : 'Backup now'}
+        </button>
+      </div>
 
-      {updaterStatus && (
-        <div style={{ marginTop: '24px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-            <div>
-              <strong>App version</strong><br />
-              <span style={{ opacity: 0.7, fontSize: '0.875rem' }}>
-                {updaterStatus.currentVersion || 'Unknown'}
-                {updaterStatus.updateAvailable ? ' — Update available: ' + (updaterStatus.updateVersion || '') : ' — Up to date'}
-              </span>
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button id="btn-check-update" className="button button-subtle" onClick={checkUpdate} disabled={checkingUpdate}>
-                {checkingUpdate ? 'Checking…' : 'Check for update'}
-              </button>
-              {updaterStatus.readyToInstall && (
-                <button id="btn-install-update" className="button button-primary" onClick={installUpdate}>
-                  Restart to update
-                </button>
-              )}
-            </div>
+      <div style={{ marginTop: '16px' }}>
+        <h3>Saved Backups ({backups.length})</h3>
+        {loading ? (
+          <p style={{ color: '#888', fontSize: '13px' }}>Loading backups list…</p>
+        ) : backups.length === 0 ? (
+          <p style={{ color: '#888', fontSize: '13px' }}>No backups created yet. Click "Backup now" to create your first snapshot.</p>
+        ) : (
+          <div className="table-scroll" style={{ maxHeight: '280px', overflowY: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Created At</th>
+                  <th>Reason</th>
+                  <th>Filename</th>
+                  <th>Size</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {backups.map((b) => (
+                  <tr key={b.filename}>
+                    <td><strong>{new Date(b.createdAt).toLocaleString()}</strong></td>
+                    <td>
+                      <span className="status-pill" style={{ textTransform: 'capitalize' }}>
+                        {b.reason?.replace('_', ' ') || 'manual'}
+                      </span>
+                    </td>
+                    <td><small style={{ fontFamily: 'monospace' }}>{b.filename}</small></td>
+                    <td>{formatBytes(b.sizeBytes)}</td>
+                    <td>
+                      <button
+                        className="button button-small button-subtle"
+                        type="button"
+                        onClick={() => handleRestore(b.filename)}
+                        disabled={restoring || creating}
+                        title="Restore this backup"
+                      >
+                        <RotateCcw size={14} />
+                        Restore
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function UpdaterStatusSection() {
+  const [updateStatus, setUpdateStatus] = useState(null)
+  const [appInfo, setAppInfo] = useState(null)
+  const [checking, setChecking] = useState(false)
+  const [installing, setInstalling] = useState(false)
+
+  async function loadStatus() {
+    if (!window.posApi?.updater) return
+    try {
+      const [statusRes, infoRes] = await Promise.all([
+        window.posApi.updater.getStatus(),
+        window.posApi.system?.getInfo ? window.posApi.system.getInfo() : Promise.resolve(null),
+      ])
+      if (statusRes?.success) setUpdateStatus(statusRes.data)
+      if (infoRes) setAppInfo(infoRes)
+    } catch (err) {
+      console.error('[Updater status error]', err)
+    }
+  }
+
+  useEffect(() => {
+    loadStatus()
+  }, [])
+
+  async function handleCheckUpdates() {
+    setChecking(true)
+    try {
+      const res = await window.posApi.updater.checkNow()
+      if (res?.success) {
+        setUpdateStatus(res.data)
+        if (res.data?.status === 'not-available' || res.data?.status === 'idle') {
+          toast.success('Your app is up to date!')
+        } else if (res.data?.status === 'available') {
+          toast.info(`New version v${res.data?.version} found! Downloading…`)
+        }
+      } else {
+        toast.error(`Update check failed: ${res?.error}`)
+      }
+    } catch (err) {
+      toast.error(friendlyError(err))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  async function handleInstallNow() {
+    setInstalling(true)
+    try {
+      await window.posApi.updater.installNow()
+    } catch (err) {
+      toast.error(`Installation failed: ${friendlyError(err)}`)
+      setInstalling(false)
+    }
+  }
+
+  const currentVersion = appInfo?.appVersion || '1.0.0'
+  const isUpdateReady = updateStatus?.status === 'downloaded'
+
+  return (
+    <section className="panel settings-panel" style={{ marginTop: '20px' }}>
+      <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <p className="eyebrow">APPLICATION UPDATES</p>
+          <h2>Software Updates</h2>
+          <p className="page-description">
+            RestaurantOS Desktop POS version <strong>v{currentVersion}</strong>.
+          </p>
+          <div style={{ marginTop: '6px', fontSize: '13px' }}>
+            {updateStatus?.status === 'downloading' ? (
+              <span style={{ color: '#f59e0b' }}>Downloading update… ({Math.round(updateStatus.progress || 0)}%)</span>
+            ) : isUpdateReady ? (
+              <span style={{ color: '#10b981', fontWeight: 600 }}>Update v{updateStatus.version} is downloaded and ready to install!</span>
+            ) : updateStatus?.status === 'checking' || checking ? (
+              <span style={{ color: '#3b82f6' }}>Checking for latest updates…</span>
+            ) : (
+              <span style={{ color: '#64748b' }}>App is running normally.</span>
+            )}
           </div>
         </div>
-      )}
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {isUpdateReady && (
+            <button
+              className="button button-primary"
+              type="button"
+              onClick={handleInstallNow}
+              disabled={installing}
+              style={{ background: '#10b981', borderColor: '#059669' }}
+            >
+              <RefreshCw size={16} />
+              {installing ? 'Restarting…' : 'Restart to update'}
+            </button>
+          )}
+          <button
+            className="button button-subtle"
+            type="button"
+            onClick={handleCheckUpdates}
+            disabled={checking || installing}
+          >
+            <RefreshCw size={16} className={checking ? 'spin' : ''} />
+            {checking ? 'Checking…' : 'Check for updates'}
+          </button>
+        </div>
+      </div>
     </section>
   )
 }
@@ -1271,6 +1525,8 @@ function SettingsPage() {
   const { membership } = useAuth()
   const [settings, setSettings] = useState({ name: '', currency, taxRate: '0', paymentMethods: 'cash, card, digital' })
   const [busy, setBusy] = useState(false)
+  const isElectron = typeof window !== 'undefined' && Boolean(window.posApi?.isElectron)
+
   useEffect(() => {
     if (!membership?.restaurantId) return undefined
     return watchRecords(membership.restaurantId, 'settings', (records) => {
@@ -1278,6 +1534,7 @@ function SettingsPage() {
       if (config) setSettings({ name: config.name || '', currency: config.currency || currency, taxRate: String((config.taxRate || 0) * 100), paymentMethods: (config.paymentMethods || ['cash', 'card', 'digital']).join(', ') })
     }, () => {})
   }, [membership?.restaurantId])
+
   async function save(event) {
     event.preventDefault()
     const taxRate = Number(settings.taxRate) / 100
@@ -1293,21 +1550,29 @@ function SettingsPage() {
       toast.success('Restaurant settings saved.')
     } catch (problem) { toast.error(friendlyError(problem)) } finally { setBusy(false) }
   }
-  return <>
-    <PageHeading eyebrow="RESTAURANT PROFILE" title="Settings" description="Basic operating and receipt settings for this restaurant." />
-    <section className="panel settings-panel">
-      <form className="settings-form" onSubmit={save}>
-        <label>Restaurant name<input required value={settings.name} onChange={(event) => setSettings({ ...settings, name: event.target.value })} placeholder="Your restaurant" /></label>
-        <label>Currency<input value="PKR · Pakistani rupee" readOnly /></label>
-        <label>Sales tax rate (%)<input type="number" min="0" max="100" step="0.01" value={settings.taxRate} onChange={(event) => setSettings({ ...settings, taxRate: event.target.value })} /></label>
-        <label>Enabled payment methods<input value={settings.paymentMethods} onChange={(event) => setSettings({ ...settings, paymentMethods: event.target.value })} /><small>Comma-separated labels. Card entry here records payment only.</small></label>
-        <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</button>
-      </form>
-    </section>
-    {/* C2 & C4: Printer + Backup panels only in Electron */}
-    {isElectronEnv && <PrinterSettingsPanel />}
-    {isElectronEnv && <BackupRestorePanel />}
-  </>
+
+  return (
+    <>
+      <PageHeading eyebrow="RESTAURANT PROFILE" title="Settings" description="Basic operating and receipt settings for this restaurant." />
+      <section className="panel settings-panel">
+        <form className="settings-form" onSubmit={save}>
+          <label>Restaurant name<input required value={settings.name} onChange={(event) => setSettings({ ...settings, name: event.target.value })} placeholder="Your restaurant" /></label>
+          <label>Currency<input value="PKR · Pakistani rupee" readOnly /></label>
+          <label>Sales tax rate (%)<input type="number" min="0" max="100" step="0.01" value={settings.taxRate} onChange={(event) => setSettings({ ...settings, taxRate: event.target.value })} /></label>
+          <label>Enabled payment methods<input value={settings.paymentMethods} onChange={(event) => setSettings({ ...settings, paymentMethods: event.target.value })} /><small>Comma-separated labels. Card entry here records payment only.</small></label>
+          <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</button>
+        </form>
+      </section>
+
+      {isElectron && (
+        <>
+          <PrinterSettingsSection restaurantId={membership?.restaurantId} />
+          <BackupRestoreSection />
+          <UpdaterStatusSection />
+        </>
+      )}
+    </>
+  )
 }
 
 function AuditPage() {
@@ -1317,65 +1582,13 @@ function AuditPage() {
   return <><PageHeading eyebrow="SECURITY & GOVERNANCE" title="Audit log" description="Latest 100 recorded changes to orders, inventory, payments and staff access." /><LimitNotices sources={[{ truncated, limit, label: 'audit events' }]} />{error && <div className="inline-alert">{error}</div>}<section className="panel records-panel"><div className="records-toolbar"><label className="search-field"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search actions or record IDs" /></label><span>{visible.length} events</span></div>{loading ? <LoadingLines /> : visible.length ? <div className="table-scroll"><table><thead><tr><th>Action</th><th>Record</th><th>Actor</th><th>Details</th><th>Time</th></tr></thead><tbody>{visible.map((entry) => <tr key={entry.id}><td><strong>{entry.action}</strong></td><td>{entry.entityId || '—'}</td><td>{entry.actorId || '—'}</td><td>{entry.reason || entry.permissions?.join(', ') || (entry.amountCents ? money(entry.amountCents) : entry.quantity !== undefined ? entry.quantity : '—')}</td><td>{formatDate(entry.createdAt)}</td></tr>)}</tbody></table></div> : <EmptyState title="No audit events yet" detail="Recorded operational changes will appear here." />}</section></>
 }
 
-const isElectronEnv = typeof window !== 'undefined' && Boolean(window.posApi?.isElectron)
-
-// C3: Load reports from SQLite via posApi.reports.* in Electron; use Firebase on web.
-async function loadElectronReport(restaurantId, range) {
-  const now = new Date()
-  const todayStr = now.toISOString().slice(0, 10)
-  let startStr
-  if (range === 'day') {
-    startStr = todayStr
-  } else if (range === 'week') {
-    const d = new Date(now); d.setDate(d.getDate() - 6)
-    startStr = d.toISOString().slice(0, 10)
-  } else {
-    const d = new Date(now.getFullYear(), now.getMonth(), 1)
-    startStr = d.toISOString().slice(0, 10)
-  }
-
-  const [summaryRes, itemsRes, paymentsRes] = await Promise.all([
-    window.posApi.reports.getDailySummary(restaurantId, startStr, todayStr),
-    window.posApi.reports.getItemsBreakdown(restaurantId, startStr, todayStr),
-    window.posApi.reports.getPayments(restaurantId, startStr, todayStr),
-  ])
-
-  if (!summaryRes.success) throw new Error(summaryRes.error || 'Report failed')
-  const s = summaryRes.data
-  const items = itemsRes.success ? itemsRes.data : { items: [], categories: [] }
-  const payments = paymentsRes.success ? paymentsRes.data : { methods: [] }
-
-  return {
-    range,
-    truncated: false,
-    summary: {
-      grossSalesCents: s.totalGrossCents || 0,
-      refundsCents: s.totalRefundedCents || 0,
-      discountsCents: s.totalDiscountCents || 0,
-      expenseCents: 0,
-    },
-    rows: (s.byOrderType || []).map((t) => ({ date: todayStr, orderCount: t.orderCount, grossSalesCents: t.totalCents })),
-    itemRows: (items.items || []).map((i) => ({ item: i.name, quantity: i.totalQuantity, grossSalesCents: i.totalRevenueCents })),
-    categoryRows: (items.categories || []).map((c) => ({ category: c.category, quantity: c.totalQuantity, grossSalesCents: c.totalRevenueCents })),
-    paymentRows: (payments.methods || []).map((m) => ({ method: m.method, amountCents: m.collectedCents })),
-    expenseRows: [],
-  }
-}
-
 function ReportsPage() {
-  const { membership } = useAuth()
   const [range, setRange] = useState('week')
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState(false)
   async function load() {
     setBusy(true)
-    try {
-      if (isElectronEnv && membership?.restaurantId) {
-        setData(await loadElectronReport(membership.restaurantId, range))
-      } else {
-        setData(await exportReport({ range }))
-      }
-    } catch (problem) { toast.error(friendlyError(problem)) } finally { setBusy(false) }
+    try { setData(await exportReport({ range })) } catch (problem) { toast.error(friendlyError(problem)) } finally { setBusy(false) }
   }
   function downloadCsv() {
     if (!data) return toast.error('Run a report before exporting.')

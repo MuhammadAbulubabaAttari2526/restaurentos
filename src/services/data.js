@@ -168,6 +168,96 @@ export async function getDashboardSummary() {
   return runOperation('getDashboardSummary', {})
 }
 
-export async function exportReport(payload) {
+export async function exportReport(payload = {}) {
+  if (isDemoSession()) return runDemoOperation('exportReport', payload)
+
+  if (isElectron()) {
+    const restaurantId =
+      payload.restaurantId ||
+      window.sessionStorage.getItem('activeRestaurantId') ||
+      'default'
+
+    const rangeName = ['day', 'week', 'month'].includes(payload.range) ? payload.range : 'week'
+    const now = new Date()
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    if (rangeName === 'week') start.setDate(start.getDate() - 6)
+    if (rangeName === 'month') start.setDate(1)
+    const startDate = start.toISOString().slice(0, 10)
+    const endDate = now.toISOString().slice(0, 10)
+
+    const [dailyRes, itemsRes, paymentsRes] = await Promise.all([
+      window.posApi.reports.getDailySummary(restaurantId, startDate, endDate),
+      window.posApi.reports.getItemsBreakdown(restaurantId, startDate, endDate),
+      window.posApi.reports.getPayments(restaurantId, startDate, endDate),
+    ])
+
+    const dailyData = dailyRes?.data || {}
+    const itemsData = itemsRes?.data || {}
+    const paymentsData = paymentsRes?.data || {}
+
+    let expenses = []
+    try {
+      expenses = await window.posApi.db.query(restaurantId, 'expenses', [], 500)
+    } catch {
+      expenses = []
+    }
+    const approvedExpenses = (expenses || []).filter((e) => e.status === 'approved' && (!e.date || e.date >= startDate))
+    const expenseCents = approvedExpenses.reduce((sum, e) => sum + (e.amountCents || 0), 0)
+    const expensesByCategory = new Map()
+    for (const exp of approvedExpenses) {
+      const cat = exp.category || 'Uncategorized'
+      expensesByCategory.set(cat, (expensesByCategory.get(cat) || 0) + (exp.amountCents || 0))
+    }
+
+    const rows = [
+      {
+        date: `${startDate} to ${endDate}`,
+        orderCount: dailyData.totalOrders || 0,
+        grossSalesCents: dailyData.totalGrossCents || 0,
+        taxCents: dailyData.totalTaxCents || 0,
+        refundsCents: dailyData.totalRefundedCents || 0,
+      },
+    ]
+
+    const itemRows = (itemsData.items || []).map((itm) => ({
+      item: itm.name,
+      category: itm.category || 'General',
+      quantity: itm.totalQuantity,
+      grossSalesCents: itm.totalRevenueCents,
+    }))
+
+    const categoryRows = (itemsData.categories || []).map((cat) => ({
+      category: cat.category,
+      quantity: cat.totalQuantity,
+      grossSalesCents: cat.totalRevenueCents,
+    }))
+
+    const paymentRows = (paymentsData.methods || []).map((pm) => ({
+      method: pm.method,
+      amountCents: pm.collectedCents,
+    }))
+
+    const expenseRows = [...expensesByCategory.entries()].map(([category, amountCents]) => ({
+      category,
+      amountCents,
+    }))
+
+    return {
+      range: rangeName,
+      truncated: false,
+      summary: {
+        grossSalesCents: dailyData.totalGrossCents || 0,
+        refundsCents: dailyData.totalRefundedCents || 0,
+        discountsCents: dailyData.totalDiscountCents || 0,
+        expenseCents,
+      },
+      rows,
+      itemRows,
+      categoryRows,
+      paymentRows,
+      expenseRows,
+    }
+  }
+
   return runOperation('exportReport', payload)
 }
