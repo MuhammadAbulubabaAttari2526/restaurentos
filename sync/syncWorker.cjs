@@ -4,7 +4,10 @@
  * Background sync worker for RestaurantOS.
  * - Pushes queued changes (sync_queue) to Firestore REST API.
  * - Pulls incremental updates from Firestore into local SQLite.
- * - Handles exponential backoff and retries.
+ * - Handles exponential backoff and retries without dropping items.
+ * - Handles auth expiry (401/403) by setting status 'auth-required' and pausing queue without burning retries.
+ * - Resets stuck 'syncing' items on startup.
+ * - Routes delete actions for collections with strict rules to soft-deletes.
  * - Dispatches sync status changes to the Electron renderer.
  */
 
@@ -27,34 +30,120 @@ const SYNCABLE_PULL_COLLECTIONS = [
   'discounts',
 ]
 
+// Collections where firestore.rules disallows hard DELETE (allow delete: if false)
+const SOFT_DELETE_COLLECTIONS = new Set([
+  'orders',
+  'orderFinancials',
+  'payments',
+  'expenses',
+  'stockMovements',
+  'purchases',
+  'reservations',
+  'users',
+  'settings',
+  'auditLogs',
+  'operationKeys',
+  'counters',
+])
+
+// Backoff delay schedule in seconds based on retry_count (15s, 30s, 1m, 5m, max 15m)
+const BACKOFF_SCHEDULE_SECONDS = [15, 30, 60, 300, 900]
+
+function getBackoffMs(retryCount) {
+  const count = Math.max(1, retryCount || 1)
+  const idx = Math.min(count - 1, BACKOFF_SCHEDULE_SECONDS.length - 1)
+  return BACKOFF_SCHEDULE_SECONDS[idx] * 1000
+}
+
+function isAuthError(err) {
+  if (!err) return false
+  const status = err.status || (err.details && err.details.error && err.details.error.code)
+  if (status === 401) return true
+  const msg = (err.message || '').toLowerCase()
+  return (
+    status === 403 &&
+    (msg.includes('unauthenticated') ||
+      msg.includes('auth credential') ||
+      msg.includes('token') ||
+      msg.includes('jwt') ||
+      msg.includes('expired'))
+  )
+}
+
+function isNetworkOrServerError(err) {
+  if (!err) return false
+  const status = err.status || 0
+  if (status >= 500 && status < 600) return true
+  const msg = (err.message || '').toLowerCase()
+  return (
+    msg.includes('econnrefused') ||
+    msg.includes('etimedout') ||
+    msg.includes('enotfound') ||
+    msg.includes('timeout') ||
+    msg.includes('network') ||
+    msg.includes('fetch failed')
+  )
+}
+
 class SyncWorker extends EventEmitter {
   constructor() {
     super()
     this.projectId = process.env.VITE_FIREBASE_PROJECT_ID || ''
     this.authToken = null
+    this.tokenExpiresAt = null
     this.restaurantId = null
     this.pollIntervalMs = 15000
-    this.maxRetries = 5
 
     this._isSyncing = false
+    this._authRequired = false
     this._interval = null
     this._window = null
     this.lastSyncTime = null
     this.lastError = null
 
+    // Reset stuck items on initialization
+    this.resetStuckItems()
+
     // Listen to network changes
     networkMonitor.on('status', ({ isOnline }) => {
       this.notifyStatus()
-      if (isOnline) {
+      if (isOnline && !this._authRequired) {
         this.triggerSync().catch(() => {})
       }
     })
   }
 
-  setCredentials({ projectId, authToken, restaurantId }) {
+  /**
+   * Reset any items left in 'syncing' status on startup (e.g. if app crashed or closed mid-sync)
+   */
+  resetStuckItems() {
+    try {
+      const db = getDb()
+      const nowIso = new Date().toISOString()
+      const result = db
+        .prepare(`UPDATE sync_queue SET status = 'pending', updated_at = ? WHERE status = 'syncing'`)
+        .run(nowIso)
+      return result.changes
+    } catch {
+      return 0
+    }
+  }
+
+  setCredentials({ projectId, authToken, restaurantId, tokenExpiresAt }) {
     if (projectId) this.projectId = projectId
-    if (authToken !== undefined) this.authToken = authToken
+    if (authToken !== undefined) {
+      const hadAuthRequired = this._authRequired
+      this.authToken = authToken
+      if (authToken) {
+        this._authRequired = false
+      }
+      if (hadAuthRequired && authToken) {
+        // Auto-resume sync when new token arrives
+        this.triggerSync().catch(() => {})
+      }
+    }
     if (restaurantId) this.restaurantId = restaurantId
+    if (tokenExpiresAt) this.tokenExpiresAt = tokenExpiresAt
     this.notifyStatus()
   }
 
@@ -67,7 +156,9 @@ class SyncWorker extends EventEmitter {
       const db = getDb()
       if (this.restaurantId) {
         const row = db
-          .prepare("SELECT COUNT(*) AS cnt FROM sync_queue WHERE restaurant_id = ? AND status IN ('pending', 'failed')")
+          .prepare(
+            "SELECT COUNT(*) AS cnt FROM sync_queue WHERE restaurant_id = ? AND status IN ('pending', 'failed')"
+          )
           .get(this.restaurantId)
         return row ? row.cnt : 0
       }
@@ -80,11 +171,33 @@ class SyncWorker extends EventEmitter {
     }
   }
 
+  getAttentionCount() {
+    try {
+      const db = getDb()
+      if (this.restaurantId) {
+        const row = db
+          .prepare(
+            "SELECT COUNT(*) AS cnt FROM sync_queue WHERE restaurant_id = ? AND status = 'failed'"
+          )
+          .get(this.restaurantId)
+        return row ? row.cnt : 0
+      }
+      const row = db
+        .prepare("SELECT COUNT(*) AS cnt FROM sync_queue WHERE status = 'failed'")
+        .get()
+      return row ? row.cnt : 0
+    } catch {
+      return 0
+    }
+  }
+
   getStatus() {
     const isOnline = networkMonitor.isOnline()
     let status = 'idle'
     if (!isOnline) {
       status = 'offline'
+    } else if (this._authRequired) {
+      status = 'auth-required'
     } else if (this._isSyncing) {
       status = 'syncing'
     } else if (this.lastError) {
@@ -95,10 +208,12 @@ class SyncWorker extends EventEmitter {
       status,
       isOnline,
       pendingCount: this.getPendingCount(),
+      attentionCount: this.getAttentionCount(),
       lastSyncTime: this.lastSyncTime,
       lastError: this.lastError,
       restaurantId: this.restaurantId,
-      hasCredentials: Boolean(this.projectId && this.restaurantId),
+      hasCredentials: Boolean(this.projectId && this.restaurantId && this.authToken),
+      authRequired: this._authRequired,
     }
   }
 
@@ -110,34 +225,59 @@ class SyncWorker extends EventEmitter {
     }
   }
 
+  /**
+   * Process pending or backoff-ready failed items in the queue
+   */
   async processQueue(batchSize = 25) {
     if (!networkMonitor.isOnline()) return 0
     if (!this.projectId) return 0
+    if (this._authRequired) return 0
 
     const db = getDb()
-    let items
+    let rawItems
     if (this.restaurantId) {
-      items = db
+      rawItems = db
         .prepare(
           `SELECT * FROM sync_queue
-           WHERE restaurant_id = ? AND status IN ('pending', 'failed') AND retry_count < ?
+           WHERE restaurant_id = ? AND status IN ('pending', 'failed')
            ORDER BY created_at ASC LIMIT ?`
         )
-        .all(this.restaurantId, this.maxRetries, batchSize)
+        .all(this.restaurantId, batchSize * 2)
     } else {
-      items = db
+      rawItems = db
         .prepare(
           `SELECT * FROM sync_queue
-           WHERE status IN ('pending', 'failed') AND retry_count < ?
+           WHERE status IN ('pending', 'failed')
            ORDER BY created_at ASC LIMIT ?`
         )
-        .all(this.maxRetries, batchSize)
+        .all(batchSize * 2)
     }
 
-    if (items.length === 0) return 0
+    if (!rawItems || rawItems.length === 0) return 0
+
+    // Filter items based on backoff schedule
+    const nowMs = Date.now()
+    const eligibleItems = []
+    for (const item of rawItems) {
+      if (item.status === 'pending') {
+        eligibleItems.push(item)
+      } else if (item.status === 'failed') {
+        const updatedAtMs = new Date(item.updated_at || item.created_at).getTime()
+        const backoffMs = getBackoffMs(item.retry_count)
+        if (nowMs - updatedAtMs >= backoffMs) {
+          eligibleItems.push(item)
+        }
+      }
+      if (eligibleItems.length >= batchSize) break
+    }
+
+    if (eligibleItems.length === 0) return 0
 
     const updateStatusStmt = db.prepare(
       `UPDATE sync_queue SET status = ?, updated_at = ? WHERE id = ?`
+    )
+    const revertPendingStmt = db.prepare(
+      `UPDATE sync_queue SET status = 'pending', updated_at = ? WHERE id = ?`
     )
     const markFailedStmt = db.prepare(
       `UPDATE sync_queue SET status = 'failed', retry_count = retry_count + 1, last_error = ?, updated_at = ? WHERE id = ?`
@@ -145,7 +285,7 @@ class SyncWorker extends EventEmitter {
 
     let processedCount = 0
 
-    for (const item of items) {
+    for (const item of eligibleItems) {
       const nowIso = new Date().toISOString()
       updateStatusStmt.run('syncing', nowIso, item.id)
 
@@ -153,13 +293,31 @@ class SyncWorker extends EventEmitter {
         const payload = JSON.parse(item.payload_json || '{}')
 
         if (item.action === 'delete') {
-          await firestoreRest.deleteDoc({
-            projectId: this.projectId,
-            authToken: this.authToken,
-            restaurantId: item.restaurant_id,
-            collection: item.collection_name,
-            docId: item.record_id,
-          })
+          if (SOFT_DELETE_COLLECTIONS.has(item.collection_name)) {
+            // Strict firestore rules disallow hard delete. Dispatch soft-delete payload
+            const softDeleteData = {
+              ...payload,
+              deletedAt: nowIso,
+              isDeleted: true,
+              updatedAt: nowIso,
+            }
+            await firestoreRest.writeDoc({
+              projectId: this.projectId,
+              authToken: this.authToken,
+              restaurantId: item.restaurant_id,
+              collection: item.collection_name,
+              docId: item.record_id,
+              data: softDeleteData,
+            })
+          } else {
+            await firestoreRest.deleteDoc({
+              projectId: this.projectId,
+              authToken: this.authToken,
+              restaurantId: item.restaurant_id,
+              collection: item.collection_name,
+              docId: item.record_id,
+            })
+          }
         } else {
           await firestoreRest.writeDoc({
             projectId: this.projectId,
@@ -187,8 +345,23 @@ class SyncWorker extends EventEmitter {
 
         processedCount++
       } catch (err) {
-        markFailedStmt.run(err.message || String(err), new Date().toISOString(), item.id)
-        this.lastError = err.message || String(err)
+        const errorMsg = err.message || String(err)
+        this.lastError = errorMsg
+
+        if (isAuthError(err)) {
+          // Auth expired/invalid: pause queue, set auth-required, DO NOT increment retry_count
+          revertPendingStmt.run(new Date().toISOString(), item.id)
+          this._authRequired = true
+          this.notifyStatus()
+          break // Stop processing further items until credentials refresh
+        } else if (isNetworkOrServerError(err)) {
+          // Transient network / 5xx error: leave as pending, DO NOT increment retry_count
+          revertPendingStmt.run(new Date().toISOString(), item.id)
+          break // Stop batch on network interruption
+        } else {
+          // Actual validation/rules/rejection error: mark failed with exponential backoff
+          markFailedStmt.run(errorMsg, new Date().toISOString(), item.id)
+        }
       }
     }
 
@@ -197,7 +370,8 @@ class SyncWorker extends EventEmitter {
 
   async pullIncremental() {
     if (!networkMonitor.isOnline()) return
-    if (!this.projectId || !this.restaurantId) return
+    if (!this.projectId || !this.restaurantId || !this.authToken) return
+    if (this._authRequired) return
 
     for (const col of SYNCABLE_PULL_COLLECTIONS) {
       const stateKey = `last_pull_${this.restaurantId}_${col}`
@@ -225,6 +399,11 @@ class SyncWorker extends EventEmitter {
           localState.set(stateKey, latest || new Date().toISOString())
         }
       } catch (err) {
+        if (isAuthError(err)) {
+          this._authRequired = true
+          this.notifyStatus()
+          break
+        }
         // Individual collection pull error doesn't block the rest
         this.lastError = `Pull failed for ${col}: ${err.message}`
       }
@@ -234,6 +413,10 @@ class SyncWorker extends EventEmitter {
   async triggerSync() {
     if (this._isSyncing) return this.getStatus()
     if (!networkMonitor.isOnline()) {
+      this.notifyStatus()
+      return this.getStatus()
+    }
+    if (this._authRequired) {
       this.notifyStatus()
       return this.getStatus()
     }
@@ -248,6 +431,9 @@ class SyncWorker extends EventEmitter {
       this.lastSyncTime = new Date().toISOString()
     } catch (err) {
       this.lastError = err.message || String(err)
+      if (isAuthError(err)) {
+        this._authRequired = true
+      }
     } finally {
       this._isSyncing = false
       this.notifyStatus()
@@ -258,11 +444,14 @@ class SyncWorker extends EventEmitter {
 
   start(intervalMs) {
     if (intervalMs) this.pollIntervalMs = intervalMs
+    this.resetStuckItems()
     networkMonitor.start()
 
     if (!this._interval) {
       this._interval = setInterval(() => {
-        this.triggerSync().catch(() => {})
+        if (!this._authRequired) {
+          this.triggerSync().catch(() => {})
+        }
       }, this.pollIntervalMs)
       if (this._interval.unref) {
         this._interval.unref()
@@ -286,4 +475,10 @@ const syncWorker = new SyncWorker()
 module.exports = {
   SyncWorker,
   syncWorker,
+  SOFT_DELETE_COLLECTIONS,
+  BACKOFF_SCHEDULE_SECONDS,
+  getBackoffMs,
+  isAuthError,
+  isNetworkOrServerError,
 }
+

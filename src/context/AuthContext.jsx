@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
+import { onIdTokenChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
 import { doc, getDoc } from 'firebase/firestore'
 import { auth, db, firebaseConfigured } from '../lib/firebase.js'
 import { activateDemoSession, clearDemoSession, demoMembership, demoUser, isDemoSession } from '../services/demoData.js'
@@ -30,7 +30,9 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     if (isDemoSession()) return undefined
     if (!auth || !db) return undefined
-    return onAuthStateChanged(auth, async (nextUser) => {
+
+    // 1. Listen to auth state and token renewals via onIdTokenChanged
+    const unsubscribe = onIdTokenChanged(auth, async (nextUser) => {
       if (isDemoSession()) {
         setUser(demoUser)
         setMembership(demoMembership)
@@ -42,16 +44,15 @@ export function AuthProvider({ children }) {
       try {
         const mem = nextUser ? await getMembership(nextUser) : null
         setMembership(mem)
-        if (mem?.restaurantId) {
+        if (mem?.restaurantId && nextUser) {
           window.sessionStorage.setItem('activeRestaurantId', mem.restaurantId)
           if (typeof window !== 'undefined' && window.posApi?.sync) {
-            nextUser.getIdToken().then((token) => {
-              window.posApi.sync.setCredentials({
-                projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-                authToken: token,
-                restaurantId: mem.restaurantId,
-              })
-            }).catch(() => {})
+            const token = await nextUser.getIdToken()
+            window.posApi.sync.setCredentials({
+              projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+              authToken: token,
+              restaurantId: mem.restaurantId,
+            })
           }
         }
       } catch {
@@ -60,6 +61,30 @@ export function AuthProvider({ children }) {
         setLoading(false)
       }
     })
+
+    // 2. Force refresh token every 45 minutes while app is active
+    const tokenRefreshInterval = setInterval(async () => {
+      if (auth?.currentUser && window.posApi?.sync) {
+        try {
+          const refreshedToken = await auth.currentUser.getIdToken(true)
+          const resId = window.sessionStorage.getItem('activeRestaurantId')
+          if (resId && refreshedToken) {
+            window.posApi.sync.setCredentials({
+              projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+              authToken: refreshedToken,
+              restaurantId: resId,
+            })
+          }
+        } catch (err) {
+          console.warn('[AuthContext] Token auto-refresh error:', err?.message)
+        }
+      }
+    }, 45 * 60 * 1000)
+
+    return () => {
+      unsubscribe()
+      clearInterval(tokenRefreshInterval)
+    }
   }, [])
 
   async function login(email, password) {
