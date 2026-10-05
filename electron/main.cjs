@@ -27,8 +27,10 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,            // false: preload ko Node access chahiye
       spellcheck: false,
+      // file:// protocol mein type="module" + crossorigin work karne ke liye
+      webSecurity: false,
     },
   })
 
