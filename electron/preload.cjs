@@ -36,6 +36,18 @@ contextBridge.exposeInMainWorld('posApi', {
     },
   },
 
+  // Offline Authentication
+  // Raw hashes, salts, and full tokens are NEVER forwarded here.
+  // Only safe user-profile fields + one-time lastToken for background re-verification.
+  auth: {
+    offlineLogin:       (payload) => ipcRenderer.invoke('auth:offlineLogin', payload),
+    sessionRestore:     (payload) => ipcRenderer.invoke('auth:sessionRestore', payload),
+    cacheCredentials:   (payload) => ipcRenderer.invoke('auth:cacheCredentials', payload),
+    updateToken:        (payload) => ipcRenderer.invoke('auth:updateToken', payload),
+    clearSession:       (payload) => ipcRenderer.invoke('auth:clearSession', payload),
+    listCachedEmails:   () => ipcRenderer.invoke('auth:listCachedEmails'),
+  },
+
   // POS Domain Operations (runs ACID operations locally offline)
   pos: {
     runOperation: (restaurantId, name, payload) =>
@@ -84,3 +96,4 @@ contextBridge.exposeInMainWorld('posApi', {
     installNow: () => ipcRenderer.invoke('updater:installNow'),
   },
 })
+

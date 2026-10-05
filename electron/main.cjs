@@ -8,6 +8,7 @@ const { registerPrintIpc } = require('./ipc/printIpc.cjs')
 const { registerReportsIpc } = require('./ipc/reportsIpc.cjs')
 const { registerBackupIpc } = require('./ipc/backupIpc.cjs')
 const { registerUpdaterIpc } = require('./ipc/updaterIpc.cjs')
+const { registerAuthIpc } = require('./ipc/authIpc.cjs')
 const { getDb, closeDb } = require('../database/sqliteClient.cjs')
 const { createBackupSync, checkMissingDatabase } = require('../backup/backupManager.cjs')
 const { initAutoUpdater, stopUpdateTimers } = require('../updater/autoUpdater.cjs')
@@ -89,6 +90,7 @@ if (!gotLock) {
     registerReportsIpc()
     registerBackupIpc()
     registerUpdaterIpc()
+    registerAuthIpc()
 
     // 4. Start background sync worker
     syncWorker.start()
