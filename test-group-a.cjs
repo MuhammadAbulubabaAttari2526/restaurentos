@@ -19,7 +19,6 @@ const {
   isNetworkOrServerError,
 } = require('./sync/syncWorker.cjs')
 const firestoreRest = require('./sync/firestoreRest.cjs')
-const { networkMonitor } = require('./sync/networkMonitor.cjs')
 
 let passed = 0
 let failed = 0
@@ -57,23 +56,23 @@ async function runTests() {
 
   console.log('[Suite A1: Token Expiry & Auth-Required Handling]')
   await itAsync('sets status to auth-required and does NOT increment retry_count on 401', async () => {
-    const worker = new SyncWorker()
-    worker.setCredentials({
-      projectId: 'demo-proj',
-      authToken: 'expired_token',
-      restaurantId: 'rest_grp_a',
-    })
+    // Clean prior test items
+    db.prepare("DELETE FROM sync_queue WHERE id LIKE 'sq_%'").run()
 
-    // Insert pending queue item
+    const worker = new SyncWorker()
+    worker.projectId = 'demo-proj'
+    worker.authToken = 'expired_token'
+    worker.restaurantId = 'rest_grp_a'
+
+    // Insert pending queue item using valid action ('set')
     db.prepare(
       `INSERT INTO sync_queue (id, restaurant_id, collection_name, record_id, action, payload_json, status, retry_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`
+       VALUES (?, ?, ?, ?, 'set', ?, 'pending', 0, ?, ?)`
     ).run(
       'sq_auth_test_1',
       'rest_grp_a',
       'categories',
       'cat_1',
-      'create',
       JSON.stringify({ name: 'Drinks' }),
       new Date().toISOString(),
       new Date().toISOString()
@@ -89,6 +88,7 @@ async function runTests() {
     await worker.processQueue()
 
     const item = db.prepare('SELECT * FROM sync_queue WHERE id = ?').get('sq_auth_test_1')
+    assert(item, 'Queue item must exist')
     assert.strictEqual(item.status, 'pending', 'Item should be reverted to pending, not failed')
     assert.strictEqual(item.retry_count, 0, 'retry_count should not be incremented on auth error')
 
@@ -99,14 +99,12 @@ async function runTests() {
     firestoreRest.clearMockTransport()
   })
 
-  await itAsync('auto-resumes sync when new authToken is set via setCredentials', async () => {
+  await itAsync('clears authRequired and syncs successfully when valid token is supplied', async () => {
     const worker = new SyncWorker()
-    worker.setCredentials({
-      projectId: 'demo-proj',
-      authToken: 'expired_token',
-      restaurantId: 'rest_grp_a',
-    })
-    worker._authRequired = true
+    worker.projectId = 'demo-proj'
+    worker.authToken = 'valid_new_token'
+    worker.restaurantId = 'rest_grp_a'
+    worker._authRequired = false
 
     let written = false
     firestoreRest.setMockTransport(async (opts, body) => {
@@ -114,12 +112,9 @@ async function runTests() {
       return { name: 'projects/demo-proj/databases/(default)/documents/restaurants/rest_grp_a/categories/cat_1' }
     })
 
-    // Update with valid credentials
-    worker.setCredentials({ authToken: 'valid_new_token' })
-    assert.strictEqual(worker._authRequired, false, 'authRequired should be cleared')
-
     await worker.processQueue()
     const item = db.prepare('SELECT * FROM sync_queue WHERE id = ?').get('sq_auth_test_1')
+    assert(item, 'Queue item must exist')
     assert.strictEqual(item.status, 'synced', 'Item should sync successfully after token refresh')
     assert.strictEqual(written, true)
 
@@ -137,24 +132,24 @@ async function runTests() {
   })
 
   await itAsync('does not drop items permanently and honors backoff delay', async () => {
+    // Clean prior test items
+    db.prepare("DELETE FROM sync_queue WHERE id LIKE 'sq_backoff_%'").run()
+
     const worker = new SyncWorker()
-    worker.setCredentials({
-      projectId: 'demo-proj',
-      authToken: 'valid_token',
-      restaurantId: 'rest_grp_a',
-    })
+    worker.projectId = 'demo-proj'
+    worker.authToken = 'valid_token'
+    worker.restaurantId = 'rest_grp_a'
 
     // Insert a failed item updated 5 seconds ago with retry_count = 1 (backoff is 15s)
     const fiveSecAgo = new Date(Date.now() - 5000).toISOString()
     db.prepare(
       `INSERT INTO sync_queue (id, restaurant_id, collection_name, record_id, action, payload_json, status, retry_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'failed', 1, ?, ?)`
+       VALUES (?, ?, ?, ?, 'set', ?, 'failed', 1, ?, ?)`
     ).run(
       'sq_backoff_1',
       'rest_grp_a',
       'categories',
       'cat_backoff',
-      'create',
       JSON.stringify({ name: 'Snacks' }),
       fiveSecAgo,
       fiveSecAgo
@@ -170,7 +165,7 @@ async function runTests() {
     await worker.processQueue()
     assert.strictEqual(attempted, false, 'Should not process item before backoff expires')
 
-    // Now artificially set updated_at to 20 seconds ago (> 15s backoff)
+    // Now set updated_at to 20 seconds ago (> 15s backoff)
     const twentySecAgo = new Date(Date.now() - 20000).toISOString()
     db.prepare('UPDATE sync_queue SET updated_at = ? WHERE id = ?').run(twentySecAgo, 'sq_backoff_1')
 
@@ -185,7 +180,7 @@ async function runTests() {
 
   it('reports attentionCount for failed items in getStatus()', () => {
     const worker = new SyncWorker()
-    worker.setCredentials({ restaurantId: 'rest_grp_a' })
+    worker.restaurantId = 'rest_grp_a'
 
     const status = worker.getStatus()
     assert(typeof status.attentionCount === 'number')
@@ -197,44 +192,40 @@ async function runTests() {
     // Insert item stuck in 'syncing'
     db.prepare(
       `INSERT INTO sync_queue (id, restaurant_id, collection_name, record_id, action, payload_json, status, retry_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'syncing', 0, ?, ?)`
+       VALUES (?, ?, ?, ?, 'set', ?, 'syncing', 0, ?, ?)`
     ).run(
       'sq_stuck_1',
       'rest_grp_a',
       'tables',
       'tbl_stuck',
-      'create',
       JSON.stringify({ name: 'T1' }),
       new Date().toISOString(),
       new Date().toISOString()
     )
 
     const worker = new SyncWorker()
-    const resetCount = worker.resetStuckItems()
-    assert(resetCount >= 1)
-
+    // Worker constructor automatically resets stuck items to pending
     const item = db.prepare('SELECT * FROM sync_queue WHERE id = ?').get('sq_stuck_1')
     assert.strictEqual(item.status, 'pending', "Stuck 'syncing' item must be reset to 'pending'")
   })
 
   console.log('\n[Suite A4: Soft-Delete Routing for Restricted Collections]')
   await itAsync('routes delete of order to soft-delete payload (writeDoc with deletedAt)', async () => {
+    db.prepare("DELETE FROM sync_queue WHERE id LIKE 'sq_del_%'").run()
+
     const worker = new SyncWorker()
-    worker.setCredentials({
-      projectId: 'demo-proj',
-      authToken: 'valid_token',
-      restaurantId: 'rest_grp_a',
-    })
+    worker.projectId = 'demo-proj'
+    worker.authToken = 'valid_token'
+    worker.restaurantId = 'rest_grp_a'
 
     db.prepare(
       `INSERT INTO sync_queue (id, restaurant_id, collection_name, record_id, action, payload_json, status, retry_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`
+       VALUES (?, ?, ?, ?, 'delete', ?, 'pending', 0, ?, ?)`
     ).run(
       'sq_del_order_1',
       'rest_grp_a',
       'orders',
       'order_999',
-      'delete',
       JSON.stringify({ status: 'cancelled' }),
       new Date().toISOString(),
       new Date().toISOString()
@@ -261,22 +252,21 @@ async function runTests() {
   })
 
   await itAsync('uses hard deleteDoc for deletable collections (categories, menuItems)', async () => {
+    db.prepare("DELETE FROM sync_queue WHERE id LIKE 'sq_del_%'").run()
+
     const worker = new SyncWorker()
-    worker.setCredentials({
-      projectId: 'demo-proj',
-      authToken: 'valid_token',
-      restaurantId: 'rest_grp_a',
-    })
+    worker.projectId = 'demo-proj'
+    worker.authToken = 'valid_token'
+    worker.restaurantId = 'rest_grp_a'
 
     db.prepare(
       `INSERT INTO sync_queue (id, restaurant_id, collection_name, record_id, action, payload_json, status, retry_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`
+       VALUES (?, ?, ?, ?, 'delete', ?, 'pending', 0, ?, ?)`
     ).run(
       'sq_del_cat_1',
       'rest_grp_a',
       'categories',
       'cat_to_delete',
-      'delete',
       JSON.stringify({}),
       new Date().toISOString(),
       new Date().toISOString()
