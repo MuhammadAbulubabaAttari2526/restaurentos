@@ -1,4 +1,5 @@
-import { BadgeCheck, Printer, ReceiptText, Utensils, X } from 'lucide-react'
+import { useCallback, useState } from 'react'
+import { BadgeCheck, ChefHat, Printer, ReceiptText, Utensils, X } from 'lucide-react'
 import { formatMoney, normalizeCurrency } from '../utils/domain.js'
 import './receipt.css'
 
@@ -14,7 +15,15 @@ function money(cents, currency) {
   return formatMoney(cents, currency)
 }
 
-export function ReceiptDialog({ order, restaurantName = 'Restaurant', currency = 'PKR', onClose }) {
+const isElectron = typeof window !== 'undefined' && Boolean(window.posApi?.isElectron)
+
+export function ReceiptDialog({
+  order,
+  restaurantName = 'Restaurant',
+  currency = 'PKR',
+  restaurantId,
+  onClose,
+}) {
   const currencyCode = normalizeCurrency(currency)
   const lines = order.items || []
   const totalCents = Number(order.totalCents || 0)
@@ -23,13 +32,56 @@ export function ReceiptDialog({ order, restaurantName = 'Restaurant', currency =
   const balanceCents = Math.max(0, totalCents - paidCents)
   const paymentLabel = refundedCents > 0 ? 'Refund recorded' : balanceCents === 0 ? 'Paid in full' : paidCents > 0 ? 'Partially paid' : 'Payment due'
 
+  const [printing, setPrinting] = useState(false)
+  const [printError, setPrintError] = useState(null)
+  const [printDone, setPrintDone] = useState(false)
+
+  // C1: Electron uses IPC thermal print; web falls back to window.print()
+  const handlePrint = useCallback(async () => {
+    setPrintError(null)
+    if (isElectron && window.posApi?.print?.receipt && restaurantId && order.id) {
+      setPrinting(true)
+      try {
+        await window.posApi.print.receipt({ restaurantId, orderId: order.id })
+        setPrintDone(true)
+      } catch (err) {
+        setPrintError(err?.message || 'Printing failed. Check printer settings.')
+      } finally {
+        setPrinting(false)
+      }
+    } else {
+      // Web fallback
+      window.print()
+    }
+  }, [restaurantId, order.id])
+
+  // C1: KOT print (kitchen order ticket)
+  const handleKot = useCallback(async () => {
+    if (!isElectron || !window.posApi?.print?.kot || !restaurantId || !order.id) return
+    setPrintError(null)
+    setPrinting(true)
+    try {
+      await window.posApi.print.kot({ restaurantId, orderId: order.id })
+    } catch (err) {
+      setPrintError(err?.message || 'KOT printing failed.')
+    } finally {
+      setPrinting(false)
+    }
+  }, [restaurantId, order.id])
+
   return (
     <div className="modal-backdrop receipt-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="modal-panel receipt-modal" role="dialog" aria-modal="true" aria-labelledby="receipt-title">
         <div className="receipt-preview-heading no-print">
-          <div><p className="eyebrow">RECEIPT PREVIEW</p><h2 id="receipt-title">Ready to print</h2></div>
+          <div><p className="eyebrow">RECEIPT PREVIEW</p><h2 id="receipt-title">{printDone ? 'Printed ✓' : 'Ready to print'}</h2></div>
           <button className="icon-button" onClick={onClose} aria-label="Close receipt"><X size={18} /></button>
         </div>
+
+        {printError && (
+          <div className="inline-alert no-print" role="alert" style={{ margin: '0 0 12px', fontSize: '0.85rem' }}>
+            {printError}
+          </div>
+        )}
 
         <article className="receipt-paper">
           <header className="receipt-header">
@@ -84,7 +136,26 @@ export function ReceiptDialog({ order, restaurantName = 'Restaurant', currency =
 
         <div className="modal-actions no-print receipt-actions">
           <button className="button button-subtle" onClick={onClose}>Close</button>
-          <button className="button button-primary" onClick={() => window.print()}><Printer size={16} /> Print receipt</button>
+          {/* KOT button only shown in Electron when order has an id */}
+          {isElectron && order.id && restaurantId && (
+            <button
+              id="btn-print-kot"
+              className="button button-subtle"
+              onClick={handleKot}
+              disabled={printing}
+              title="Print kitchen order ticket"
+            >
+              <ChefHat size={16} /> KOT
+            </button>
+          )}
+          <button
+            id="btn-print-receipt"
+            className="button button-primary"
+            onClick={handlePrint}
+            disabled={printing}
+          >
+            <Printer size={16} /> {printing ? 'Printing…' : 'Print receipt'}
+          </button>
         </div>
       </section>
     </div>

@@ -364,7 +364,7 @@ function PosPage() {
       {orderType === 'dine-in' && <label className="compact-label">Guests<input aria-label="Guests" type="number" min="1" max="40" step="1" required value={covers} onChange={(event) => setCovers(event.target.value)} /></label>}
       <div className="cart-totals"><div><span>Subtotal</span><span>{money(totals.subtotalCents)}</span></div>{totals.discountCents > 0 && <div><span>Discount</span><span>−{money(totals.discountCents)}</span></div>}<div><span>Tax</span><span>{money(totals.taxCents)}</span></div><div className="cart-grand-total"><strong>Total</strong><strong>{money(totals.totalCents)}</strong></div></div>
       <button className="button button-primary send-order" onClick={submitOrder} disabled={busy || !cart.length}>{busy ? 'Saving order…' : 'Create order'}<ArrowUpRight size={17} /></button><p className="cart-security-note">Prices and tax are recalculated from the current menu before saving.</p>
-    </aside></div>{optionItem && <MenuOptionsDialog item={optionItem} onCancel={() => setOptionItem(null)} onAdd={(variantId, addOnIds) => { addToCart(optionItem, variantId, addOnIds); setOptionItem(null) }} />}{receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} onClose={() => setReceipt(null)} />}</div>
+    </aside></div>{optionItem && <MenuOptionsDialog item={optionItem} onCancel={() => setOptionItem(null)} onAdd={(variantId, addOnIds) => { addToCart(optionItem, variantId, addOnIds); setOptionItem(null) }} />}{receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} restaurantId={membership?.restaurantId} onClose={() => setReceipt(null)} />}</div>
 }
 
 function MenuOptionsDialog({ item, onCancel, onAdd }) {
@@ -461,7 +461,7 @@ function OrdersPage() {
     <section className="panel records-panel">{loading ? <LoadingLines /> : visible.length ? <div className="table-scroll"><table><thead><tr><th>Order</th><th>Placed</th><th>Type / table</th><th>Items</th>{canSeeFinancials && <><th>Payment</th><th>Total</th></>}<th>Next action</th></tr></thead><tbody>{visible.map((order) => <tr key={order.id}><td><strong>{order.orderNumber || `#${order.id.slice(0, 7)}`}</strong></td><td>{formatDate(order.createdAt)}</td><td>{order.type || 'dine-in'}{order.tableName ? ` · ${order.tableName}` : ''}</td><td>{order.items?.reduce((sum, item) => sum + item.quantity, 0) || 0} items</td>{canSeeFinancials && <><td><button className={`payment-status ${order.paymentStatus === 'paid' ? 'paid' : ''}`} onClick={() => setPaymentOrder(order)}>{order.paymentStatus || 'unpaid'}{order.paymentStatus !== 'paid' && <CirclePlus size={14} />}</button></td><td>{money(order.totalCents)}</td></>}<td><div className="row-actions">{order.status && !['served', 'cancelled'].includes(order.status) && <><button className="button button-small" onClick={() => openOrderAction(order)} disabled={busyId === order.id}>{busyId === order.id ? 'Updating' : nextAction(order.status)}</button>{canVoidOrders && <button className="button button-small button-danger" onClick={() => cancelOrder(order)} disabled={busyId === order.id}>Cancel</button>}{canTransferTable && order.type === 'dine-in' && <button className="button button-small" onClick={() => setTransferTarget(order)}>Transfer table</button>}</>}{canSeeFinancials && <button className="icon-button" title="Print receipt" aria-label="Print receipt" onClick={() => setReceipt(order)}><Printer size={16} /></button>}</div></td></tr>)}</tbody></table></div> : <EmptyState title="No orders in this view" detail="New POS orders will appear here as soon as they are sent." />}</section>
     {detailsOrder && <OrderDetailsDialog order={detailsOrder} canSeeFinancials={canSeeFinancials} onClose={() => setDetailsOrder(null)} />}
     {paymentOrder && <PaymentDialog order={paymentOrder} onClose={() => setPaymentOrder(null)} />}
-    {receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} onClose={() => setReceipt(null)} />}
+    {receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} restaurantId={membership?.restaurantId} onClose={() => setReceipt(null)} />}
     {transferTarget && <TransferTableDialog order={transferTarget} onClose={() => setTransferTarget(null)} onTransferred={() => setTransferTarget(null)} />}
   </>
 }
@@ -1051,6 +1051,222 @@ function StaffPermissionsDialog({ staff, busy, onClose, onSave }) {
   return <div className="modal-backdrop" role="presentation"><section className="modal-panel permission-dialog" role="dialog" aria-modal="true" aria-labelledby="permission-title"><div className="modal-heading permission-header"><div><p className="eyebrow">{staff.role.toUpperCase()} ACCESS</p><h2 id="permission-title">{staff.displayName || staff.email}</h2></div><button className="icon-button" aria-label="Close" onClick={onClose}>×</button></div><fieldset className="permission-list"><legend>Additional permissions</legend>{options.map((option) => <label className="permission-option" key={option.id}><input type="checkbox" checked={selected.includes(option.id)} onChange={() => toggle(option.id)} /><span>{option.label}</span></label>)}</fieldset><div className="modal-actions permission-actions"><button className="button button-subtle" onClick={onClose}>Cancel</button><button className="button button-primary" onClick={() => onSave(selected)} disabled={busy}>{busy ? 'Saving…' : 'Save permissions'}</button></div></section></div>
 }
 
+// C4: Printer Settings panel (Electron only)
+function PrinterSettingsPanel() {
+  const { membership } = useAuth()
+  const rid = membership?.restaurantId
+  const [printers, setPrinters] = useState([])
+  const [windowsPrinters, setWindowsPrinters] = useState([])
+  const [form, setForm] = useState({ name: '', connection_type: 'driver', ip_address: '', paper_width: '80', copies: '1', auto_print: '0', is_default: '1' })
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [selectedPrinterForTest, setSelectedPrinterForTest] = useState('')
+
+  useEffect(() => {
+    if (!rid || !window.posApi?.print) return
+    window.posApi.print.listPrinters(rid).then(setPrinters).catch(() => {})
+    window.posApi.print.listWindowsPrinters().then(setWindowsPrinters).catch(() => {})
+  }, [rid])
+
+  async function savePrinter(event) {
+    event.preventDefault()
+    if (!rid) return
+    setSaving(true)
+    try {
+      await window.posApi.db.upsert(rid, 'printers', {
+        name: form.name.trim(),
+        connection_type: form.connection_type,
+        ip_address: form.ip_address.trim(),
+        port: 9100,
+        paper_width: Number(form.paper_width),
+        copies: Math.max(1, Number(form.copies)),
+        auto_print: form.auto_print === '1' ? 1 : 0,
+        is_default: 1,
+      })
+      toast.success('Printer saved.')
+      window.posApi.print.listPrinters(rid).then(setPrinters).catch(() => {})
+    } catch (err) { toast.error(err?.message || 'Could not save printer.') } finally { setSaving(false) }
+  }
+
+  async function testPrint(printerId) {
+    if (!rid) return
+    setTesting(true)
+    try {
+      await window.posApi.print.test({ restaurantId: rid, printerId })
+      toast.success('Test page sent!')
+    } catch (err) { toast.error(err?.message || 'Test print failed.') } finally { setTesting(false) }
+  }
+
+  return (
+    <section className="panel settings-panel">
+      <div className="section-title"><h2>Printer settings</h2></div>
+      <form className="settings-form" onSubmit={savePrinter}>
+        <label>Printer name
+          {windowsPrinters.length > 0
+            ? <select value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required>
+                <option value="">Select a printer</option>
+                {windowsPrinters.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            : <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Printer name" />}
+        </label>
+        <label>Connection type
+          <select value={form.connection_type} onChange={(e) => setForm({ ...form, connection_type: e.target.value })}>
+            <option value="driver">Windows driver (recommended)</option>
+            <option value="network">Network / IP</option>
+            <option value="usb">USB raw</option>
+          </select>
+        </label>
+        {form.connection_type === 'network' && (
+          <label>IP address<input value={form.ip_address} onChange={(e) => setForm({ ...form, ip_address: e.target.value })} placeholder="192.168.1.100" /></label>
+        )}
+        <label>Paper width
+          <select value={form.paper_width} onChange={(e) => setForm({ ...form, paper_width: e.target.value })}>
+            <option value="80">80 mm</option>
+            <option value="58">58 mm</option>
+          </select>
+        </label>
+        <label>Copies<input type="number" min="1" max="5" value={form.copies} onChange={(e) => setForm({ ...form, copies: e.target.value })} /></label>
+        <label>Auto-print on order creation
+          <select value={form.auto_print} onChange={(e) => setForm({ ...form, auto_print: e.target.value })}>
+            <option value="0">Disabled</option>
+            <option value="1">Enabled</option>
+          </select>
+        </label>
+        <button className="button button-primary" disabled={saving}>{saving ? 'Saving…' : 'Save printer'}</button>
+      </form>
+      {printers.length > 0 && (
+        <div style={{ marginTop: '16px' }}>
+          <strong style={{ fontSize: '0.85rem', opacity: 0.7 }}>Configured printers</strong>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+            {printers.map((p) => (
+              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: '8px' }}>
+                <span style={{ flex: 1 }}><strong>{p.name}</strong> · {p.paper_width}mm · {p.connection_type}</span>
+                <button
+                  id={`btn-test-print-${p.id}`}
+                  className="button button-small button-subtle"
+                  onClick={() => testPrint(p.id)}
+                  disabled={testing}
+                >{testing ? '…' : 'Test Print'}</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+// C4: Backup/Restore + Updater UI (Electron only)
+function BackupRestorePanel() {
+  const [backups, setBackups] = useState([])
+  const [busyCreate, setBusyCreate] = useState(false)
+  const [busyRestore, setBusyRestore] = useState('')
+  const [updaterStatus, setUpdaterStatus] = useState(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+
+  function refreshBackups() {
+    if (!window.posApi?.backup) return
+    window.posApi.backup.list().then((res) => { if (res.success) setBackups(res.data || []) }).catch(() => {})
+  }
+
+  function refreshUpdater() {
+    if (!window.posApi?.updater) return
+    window.posApi.updater.getStatus().then((res) => { if (res.success) setUpdaterStatus(res.data) }).catch(() => {})
+  }
+
+  useEffect(() => { refreshBackups(); refreshUpdater() }, [])
+
+  async function createBackup() {
+    setBusyCreate(true)
+    try {
+      const res = await window.posApi.backup.create('manual')
+      if (res.success) { toast.success('Backup created.'); refreshBackups() }
+      else toast.error(res.error || 'Backup failed.')
+    } catch (err) { toast.error(err?.message || 'Backup failed.') } finally { setBusyCreate(false) }
+  }
+
+  async function restoreBackup(filename) {
+    if (!window.confirm(`Restore from ${filename}? Current data will be backed up first, then replaced. The app will need to restart.`)) return
+    setBusyRestore(filename)
+    try {
+      const res = await window.posApi.backup.restore(filename)
+      if (res.success) toast.success('Restored. Please restart the app.')
+      else toast.error(res.error || 'Restore failed.')
+    } catch (err) { toast.error(err?.message || 'Restore failed.') } finally { setBusyRestore('') }
+  }
+
+  async function checkUpdate() {
+    setCheckingUpdate(true)
+    try {
+      const res = await window.posApi.updater.checkNow()
+      if (res.success) setUpdaterStatus(res.data)
+    } catch (err) { toast.error(err?.message || 'Update check failed.') } finally { setCheckingUpdate(false) }
+  }
+
+  async function installUpdate() {
+    try { await window.posApi.updater.installNow() } catch (err) { toast.error(err?.message || 'Install failed.') }
+  }
+
+  return (
+    <section className="panel settings-panel">
+      <div className="section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h2>Data backup</h2>
+        <button id="btn-backup-now" className="button button-subtle" onClick={createBackup} disabled={busyCreate}>{busyCreate ? 'Backing up…' : 'Backup now'}</button>
+      </div>
+      {backups.length === 0 ? (
+        <p style={{ opacity: 0.6, fontSize: '0.875rem' }}>No backups yet. Click "Backup now" to create one.</p>
+      ) : (
+        <div className="table-scroll" style={{ marginTop: '8px' }}>
+          <table>
+            <thead><tr><th>File</th><th>Size</th><th>Date</th><th></th></tr></thead>
+            <tbody>
+              {backups.map((b) => (
+                <tr key={b.filename}>
+                  <td><code style={{ fontSize: '0.8rem' }}>{b.filename}</code></td>
+                  <td>{b.sizeKb ? `${b.sizeKb} KB` : '—'}</td>
+                  <td>{b.createdAt ? new Date(b.createdAt).toLocaleString() : '—'}</td>
+                  <td>
+                    <button
+                      id={`btn-restore-${b.filename}`}
+                      className="button button-small button-subtle"
+                      disabled={!!busyRestore}
+                      onClick={() => restoreBackup(b.filename)}
+                    >{busyRestore === b.filename ? 'Restoring…' : 'Restore'}</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {updaterStatus && (
+        <div style={{ marginTop: '24px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+            <div>
+              <strong>App version</strong><br />
+              <span style={{ opacity: 0.7, fontSize: '0.875rem' }}>
+                {updaterStatus.currentVersion || 'Unknown'}
+                {updaterStatus.updateAvailable ? ' — Update available: ' + (updaterStatus.updateVersion || '') : ' — Up to date'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button id="btn-check-update" className="button button-subtle" onClick={checkUpdate} disabled={checkingUpdate}>
+                {checkingUpdate ? 'Checking…' : 'Check for update'}
+              </button>
+              {updaterStatus.readyToInstall && (
+                <button id="btn-install-update" className="button button-primary" onClick={installUpdate}>
+                  Restart to update
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function SettingsPage() {
   const { membership } = useAuth()
   const [settings, setSettings] = useState({ name: '', currency, taxRate: '0', paymentMethods: 'cash, card, digital' })
@@ -1077,7 +1293,21 @@ function SettingsPage() {
       toast.success('Restaurant settings saved.')
     } catch (problem) { toast.error(friendlyError(problem)) } finally { setBusy(false) }
   }
-  return <><PageHeading eyebrow="RESTAURANT PROFILE" title="Settings" description="Basic operating and receipt settings for this restaurant." /><section className="panel settings-panel"><form className="settings-form" onSubmit={save}><label>Restaurant name<input required value={settings.name} onChange={(event) => setSettings({ ...settings, name: event.target.value })} placeholder="Your restaurant" /></label><label>Currency<input value="PKR · Pakistani rupee" readOnly /></label><label>Sales tax rate (%)<input type="number" min="0" max="100" step="0.01" value={settings.taxRate} onChange={(event) => setSettings({ ...settings, taxRate: event.target.value })} /></label><label>Enabled payment methods<input value={settings.paymentMethods} onChange={(event) => setSettings({ ...settings, paymentMethods: event.target.value })} /><small>Comma-separated labels. Card entry here records payment only.</small></label><button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</button></form></section></>
+  return <>
+    <PageHeading eyebrow="RESTAURANT PROFILE" title="Settings" description="Basic operating and receipt settings for this restaurant." />
+    <section className="panel settings-panel">
+      <form className="settings-form" onSubmit={save}>
+        <label>Restaurant name<input required value={settings.name} onChange={(event) => setSettings({ ...settings, name: event.target.value })} placeholder="Your restaurant" /></label>
+        <label>Currency<input value="PKR · Pakistani rupee" readOnly /></label>
+        <label>Sales tax rate (%)<input type="number" min="0" max="100" step="0.01" value={settings.taxRate} onChange={(event) => setSettings({ ...settings, taxRate: event.target.value })} /></label>
+        <label>Enabled payment methods<input value={settings.paymentMethods} onChange={(event) => setSettings({ ...settings, paymentMethods: event.target.value })} /><small>Comma-separated labels. Card entry here records payment only.</small></label>
+        <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</button>
+      </form>
+    </section>
+    {/* C2 & C4: Printer + Backup panels only in Electron */}
+    {isElectronEnv && <PrinterSettingsPanel />}
+    {isElectronEnv && <BackupRestorePanel />}
+  </>
 }
 
 function AuditPage() {
@@ -1087,13 +1317,65 @@ function AuditPage() {
   return <><PageHeading eyebrow="SECURITY & GOVERNANCE" title="Audit log" description="Latest 100 recorded changes to orders, inventory, payments and staff access." /><LimitNotices sources={[{ truncated, limit, label: 'audit events' }]} />{error && <div className="inline-alert">{error}</div>}<section className="panel records-panel"><div className="records-toolbar"><label className="search-field"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search actions or record IDs" /></label><span>{visible.length} events</span></div>{loading ? <LoadingLines /> : visible.length ? <div className="table-scroll"><table><thead><tr><th>Action</th><th>Record</th><th>Actor</th><th>Details</th><th>Time</th></tr></thead><tbody>{visible.map((entry) => <tr key={entry.id}><td><strong>{entry.action}</strong></td><td>{entry.entityId || '—'}</td><td>{entry.actorId || '—'}</td><td>{entry.reason || entry.permissions?.join(', ') || (entry.amountCents ? money(entry.amountCents) : entry.quantity !== undefined ? entry.quantity : '—')}</td><td>{formatDate(entry.createdAt)}</td></tr>)}</tbody></table></div> : <EmptyState title="No audit events yet" detail="Recorded operational changes will appear here." />}</section></>
 }
 
+const isElectronEnv = typeof window !== 'undefined' && Boolean(window.posApi?.isElectron)
+
+// C3: Load reports from SQLite via posApi.reports.* in Electron; use Firebase on web.
+async function loadElectronReport(restaurantId, range) {
+  const now = new Date()
+  const todayStr = now.toISOString().slice(0, 10)
+  let startStr
+  if (range === 'day') {
+    startStr = todayStr
+  } else if (range === 'week') {
+    const d = new Date(now); d.setDate(d.getDate() - 6)
+    startStr = d.toISOString().slice(0, 10)
+  } else {
+    const d = new Date(now.getFullYear(), now.getMonth(), 1)
+    startStr = d.toISOString().slice(0, 10)
+  }
+
+  const [summaryRes, itemsRes, paymentsRes] = await Promise.all([
+    window.posApi.reports.getDailySummary(restaurantId, startStr, todayStr),
+    window.posApi.reports.getItemsBreakdown(restaurantId, startStr, todayStr),
+    window.posApi.reports.getPayments(restaurantId, startStr, todayStr),
+  ])
+
+  if (!summaryRes.success) throw new Error(summaryRes.error || 'Report failed')
+  const s = summaryRes.data
+  const items = itemsRes.success ? itemsRes.data : { items: [], categories: [] }
+  const payments = paymentsRes.success ? paymentsRes.data : { methods: [] }
+
+  return {
+    range,
+    truncated: false,
+    summary: {
+      grossSalesCents: s.totalGrossCents || 0,
+      refundsCents: s.totalRefundedCents || 0,
+      discountsCents: s.totalDiscountCents || 0,
+      expenseCents: 0,
+    },
+    rows: (s.byOrderType || []).map((t) => ({ date: todayStr, orderCount: t.orderCount, grossSalesCents: t.totalCents })),
+    itemRows: (items.items || []).map((i) => ({ item: i.name, quantity: i.totalQuantity, grossSalesCents: i.totalRevenueCents })),
+    categoryRows: (items.categories || []).map((c) => ({ category: c.category, quantity: c.totalQuantity, grossSalesCents: c.totalRevenueCents })),
+    paymentRows: (payments.methods || []).map((m) => ({ method: m.method, amountCents: m.collectedCents })),
+    expenseRows: [],
+  }
+}
+
 function ReportsPage() {
+  const { membership } = useAuth()
   const [range, setRange] = useState('week')
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState(false)
   async function load() {
     setBusy(true)
-    try { setData(await exportReport({ range })) } catch (problem) { toast.error(friendlyError(problem)) } finally { setBusy(false) }
+    try {
+      if (isElectronEnv && membership?.restaurantId) {
+        setData(await loadElectronReport(membership.restaurantId, range))
+      } else {
+        setData(await exportReport({ range }))
+      }
+    } catch (problem) { toast.error(friendlyError(problem)) } finally { setBusy(false) }
   }
   function downloadCsv() {
     if (!data) return toast.error('Run a report before exporting.')

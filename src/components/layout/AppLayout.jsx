@@ -27,11 +27,43 @@ const links = [
 
 const pageNames = Object.fromEntries(links.map(({ path, label }) => [path, label]))
 
+// C5: Derive dot color and label text from sync state
+// Field names match syncWorker.getStatus(): attentionCount, lastSyncTime
+function syncIndicator(syncState) {
+  const { isOnline, status, pendingCount, attentionCount, lastSyncTime } = syncState
+
+  if (!isOnline) {
+    return { color: '#94a3b8', label: 'Offline POS · SQLite' }
+  }
+  if (status === 'auth-required') {
+    return { color: '#f59e0b', label: 'Sync paused · re-login needed' }
+  }
+  if (status === 'syncing') {
+    return { color: '#f59e0b', label: `Syncing (${pendingCount} pending)` }
+  }
+  if (attentionCount > 0) {
+    return { color: '#ef4444', label: `${attentionCount} item${attentionCount > 1 ? 's' : ''} need attention` }
+  }
+  if (pendingCount > 0) {
+    return { color: '#f59e0b', label: `Sync (${pendingCount} pending)` }
+  }
+  const lastSyncLabel = lastSyncTime
+    ? `Synced ${new Date(lastSyncTime).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+    : 'Desktop POS · Synced'
+  return { color: '#10b981', label: lastSyncLabel }
+}
+
 export function AppLayout({ children }) {
   const { user, membership, logout } = useAuth()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [restaurantName, setRestaurantName] = useState('')
-  const [syncState, setSyncState] = useState({ isOnline: true, status: 'idle', pendingCount: 0 })
+  const [syncState, setSyncState] = useState({
+    isOnline: true,
+    status: 'idle',
+    pendingCount: 0,
+    attentionCount: 0,
+    lastSyncTime: null,
+  })
   const location = useLocation()
   const role = membership?.role || 'staff'
   const visibleLinks = links.filter((link) => link.roles.includes(role))
@@ -77,6 +109,8 @@ export function AppLayout({ children }) {
     }
   }, [drawerOpen])
 
+  const { color: syncDotColor, label: syncLabel } = syncIndicator(syncState)
+
   return (
     <div className="app-frame">
       {drawerOpen && <button className="drawer-scrim" aria-label="Close navigation" onClick={closeDrawer} />}
@@ -106,19 +140,14 @@ export function AppLayout({ children }) {
           <div className="topbar-right">
             {typeof window !== 'undefined' && window.posApi?.isElectron ? (
               <button
-                className={`service-status ${!syncState.isOnline ? 'offline-status' : syncState.status === 'syncing' ? 'syncing-status' : 'desktop-status'}`}
+                id="sync-status-indicator"
+                className={`service-status ${!syncState.isOnline ? 'offline-status' : syncState.status === 'syncing' ? 'syncing-status' : syncState.status === 'auth-required' ? 'syncing-status' : 'desktop-status'}`}
                 onClick={() => window.posApi?.sync?.trigger().catch(() => {})}
-                title="Click to trigger sync"
+                title={`Sync status: ${syncLabel}. Click to trigger sync.`}
                 style={{ cursor: 'pointer', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '9999px', padding: '4px 12px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
               >
-                <i style={{ width: '8px', height: '8px', borderRadius: '50%', display: 'inline-block', background: !syncState.isOnline ? '#94a3b8' : syncState.status === 'syncing' ? '#f59e0b' : '#10b981' }} />
-                {!syncState.isOnline
-                  ? 'Offline POS · SQLite'
-                  : syncState.status === 'syncing'
-                  ? `Syncing (${syncState.pendingCount} pending)`
-                  : syncState.pendingCount > 0
-                  ? `Sync (${syncState.pendingCount} pending)`
-                  : 'Desktop POS · Synced'}
+                <i style={{ width: '8px', height: '8px', borderRadius: '50%', display: 'inline-block', background: syncDotColor }} />
+                {syncLabel}
               </button>
             ) : (
               <span className={`service-status ${membership?.demo ? 'demo-status' : ''}`}><i /> {membership?.demo ? 'Demo · sample data' : 'Live workspace'}</span>
