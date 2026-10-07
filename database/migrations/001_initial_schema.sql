@@ -1,3 +1,4 @@
+/*
 RestaurantOS (Electron + SQLite + Firebase sync) ke review mein ye bugs/gaps mile hain. Inko ek-ek karke fix karo. Existing UI/design, web (Firebase) version, aur jo kaam kar raha hai usay mat todna. Sirf zaroori, minimal changes. Har fix ke baad test chalao (npm test, npm run test:electron, aur related headless tests), aur result report karo. Har group (A, B, C, D) ke baad ruko aur meri approval lo.
 
 SHURU KARNE SE PEHLE
@@ -69,7 +70,9 @@ D7. README update: Windows par run/test/build/installer ke exact commands, dev D
 
 END MEIN
 - Sab tests chalao: npm test, npm run test:electron, test-phase*-headless scripts, aur naye tests (token refresh, retry/backoff, stuck syncing reset, rules emulator, offline login, migration failure).
-- Final report do: kya fix hua, kaunsi file badli, kaun sa test pass/fail, aur jo kaam abhi bhi manual hardware testing maangta hai (thermal printer, Windows installer, update).-- ============================================================
+- Final report do: kya fix hua, kaunsi file badli, kaun sa test pass/fail, aur jo kaam abhi bhi manual hardware testing maangta hai (thermal printer, Windows installer, update).
+*/
+-- ============================================================
 -- RestaurantOS Local SQLite Schema  v1
 -- Mirrors Firestore subcollection structure per restaurant.
 -- All monetary values in integer cents.

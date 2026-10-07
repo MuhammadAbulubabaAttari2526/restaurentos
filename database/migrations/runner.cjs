@@ -17,7 +17,7 @@ const { createPreMigrationBackupSync, pruneOldBackups } = require('../../backup/
  *
  * @param {import('better-sqlite3').Database} db
  */
-function runMigrations(db) {
+function runMigrations(db, migrationsDir = __dirname) {
   // 1. Ensure schema_version table exists before querying it
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -27,7 +27,6 @@ function runMigrations(db) {
   `)
 
   // 2. Discover available migration files
-  const migrationsDir = path.join(__dirname)
   const files = fs.readdirSync(migrationsDir)
     .filter((f) => /^\d{3}_.*\.sql$/.test(f))
     .sort()
@@ -62,7 +61,10 @@ function runMigrations(db) {
     try {
       createPreMigrationBackupSync(db, currentVersion, targetVersion)
     } catch (bErr) {
-      console.warn(`[DB Migration] Warning: pre-migration backup creation encountered: ${bErr.message}`)
+      if (currentVersion > 0) {
+        throw new Error(`[DB Migration] Cannot migrate from v${currentVersion} to v${targetVersion}: pre-migration backup failed: ${bErr.message}`)
+      }
+      console.warn(`[DB Migration] Skipping backup for new database: ${bErr.message}`)
     }
 
     // Step B: Load migration SQL

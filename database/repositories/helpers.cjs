@@ -44,7 +44,7 @@ function toJson(value) {
  * Build a unique ID.
  */
 function makeId() {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
+  return require('crypto').randomUUID()
 }
 
 module.exports = { now, toIso, parseJson, toJson, makeId }
