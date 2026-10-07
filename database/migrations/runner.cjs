@@ -17,7 +17,9 @@ const { createPreMigrationBackupSync, pruneOldBackups } = require('../../backup/
  *
  * @param {import('better-sqlite3').Database} db
  */
-function runMigrations(db, migrationsDir = __dirname) {
+function runMigrations(db, migrationsDir = __dirname, safeguards = {}) {
+  const createBackup = safeguards.createPreMigrationBackupSync || createPreMigrationBackupSync
+  const pruneBackups = safeguards.pruneOldBackups || pruneOldBackups
   // 1. Ensure schema_version table exists before querying it
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -28,7 +30,8 @@ function runMigrations(db, migrationsDir = __dirname) {
 
   // 2. Discover available migration files
   const files = fs.readdirSync(migrationsDir)
-    .filter((f) => /^\d{3}_.*\.sql$/.test(f))
+    // SQL fixtures with a test name must never advance a production schema version.
+    .filter((f) => /^\d{3}_.*\.sql$/i.test(f) && !/^\d{3}_test_/i.test(f))
     .sort()
 
   const maxAppVersion = files.length > 0
@@ -59,7 +62,7 @@ function runMigrations(db, migrationsDir = __dirname) {
 
     // Step A: Create pre-migration backup before touching schema
     try {
-      createPreMigrationBackupSync(db, currentVersion, targetVersion)
+      createBackup(db, currentVersion, targetVersion)
     } catch (bErr) {
       if (currentVersion > 0) {
         throw new Error(`[DB Migration] Cannot migrate from v${currentVersion} to v${targetVersion}: pre-migration backup failed: ${bErr.message}`)
@@ -79,7 +82,7 @@ function runMigrations(db, migrationsDir = __dirname) {
           /CREATE TABLE IF NOT EXISTS schema_version[\s\S]*?;\n/i,
           ''
         )
-        db.exec(cleanedSql)
+        db.exec(skipExistingColumnAdds(db, cleanedSql))
         db.prepare(
           'INSERT INTO schema_version (version, applied_at) VALUES (?, ?)'
         ).run(targetVersion, new Date().toISOString())
@@ -97,7 +100,23 @@ function runMigrations(db, migrationsDir = __dirname) {
   }
 
   // Prune any backups exceeding retention limit
-  pruneOldBackups()
+  pruneBackups()
+}
+
+/**
+ * A database may already have an additive column from a prior beta migration.
+ * Skip only ALTER TABLE ADD COLUMN statements for columns that are present;
+ * this lets later repair migrations safely converge old and new installs.
+ */
+function skipExistingColumnAdds(db, sql) {
+  return sql.replace(
+    /ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+([A-Za-z_][A-Za-z0-9_]*)\b[^;]*;/gi,
+    (statement, table, column) => {
+      const exists = db.prepare(`PRAGMA table_info("${table}")`).all()
+        .some((entry) => entry.name === column)
+      return exists ? `-- ${table}.${column} already exists; migration is safe to resume.\n` : statement
+    },
+  )
 }
 
 module.exports = { runMigrations }
