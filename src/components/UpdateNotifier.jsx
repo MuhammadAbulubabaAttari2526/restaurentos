@@ -1,18 +1,5 @@
-/**
- * UpdateNotifier.jsx
- *
- * Auto-update notification component.
- * Shows a non-intrusive bottom banner when:
- *   - Update is available   → "Downloading..." info
- *   - Update downloading    → progress bar
- *   - Update ready          → "Restart to Update" button
- *
- * Rules:
- *  - Never interrupts active POS sales (dismissible at any time)
- *  - Install only when user explicitly clicks "Restart & Install"
- */
-
-import { useState, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { BellRing, CheckCircle2, Download } from 'lucide-react'
 
 const isElectron = typeof window !== 'undefined' && window.posApi?.isElectron
 
@@ -20,119 +7,121 @@ export function UpdateNotifier() {
   const [updateState, setUpdateState] = useState(null)
   const [dismissed, setDismissed] = useState(false)
   const [installing, setInstalling] = useState(false)
+  const [actionError, setActionError] = useState('')
 
   useEffect(() => {
-    if (!isElectron) return
+    if (!isElectron) return undefined
+    let mounted = true
 
-    // Fetch current status on mount
-    window.posApi.updater.getStatus().then((res) => {
-      if (res?.data) setUpdateState(res.data)
+    window.posApi.updater.getStatus().then((result) => {
+      if (mounted && result?.data) setUpdateState(result.data)
     }).catch(() => {})
 
-    // Listen for push events from main process via preload listener
-    // We add an event listener on the window object for the IPC push
-    function handleIpc(e) {
-      if (e.detail?.status) {
-        setUpdateState(e.detail)
-        if (e.detail.status === 'downloaded') setDismissed(false)
-      }
+    function handleUpdateStatus(event) {
+      if (!event.detail?.status) return
+      setUpdateState(event.detail)
+      setActionError('')
+      if (event.detail.status === 'downloaded') setDismissed(false)
     }
-    window.addEventListener('updater:status-changed', handleIpc)
-    return () => window.removeEventListener('updater:status-changed', handleIpc)
+    window.addEventListener('updater:status-changed', handleUpdateStatus)
+    return () => {
+      mounted = false
+      window.removeEventListener('updater:status-changed', handleUpdateStatus)
+    }
   }, [])
 
-  // Poll status every 30s as a fallback
   useEffect(() => {
-    if (!isElectron) return
-    const id = setInterval(async () => {
+    if (!isElectron) return undefined
+    const timer = setInterval(async () => {
       try {
-        const res = await window.posApi.updater.getStatus()
-        if (res?.data) setUpdateState(res.data)
+        const result = await window.posApi.updater.getStatus()
+        if (result?.data) setUpdateState(result.data)
       } catch {}
     }, 30000)
-    return () => clearInterval(id)
+    return () => clearInterval(timer)
+  }, [])
+
+  const handleDownload = useCallback(async () => {
+    setActionError('')
+    try {
+      const result = await window.posApi.updater.download()
+      if (!result?.success) setActionError(result?.error || 'The update could not be downloaded.')
+    } catch (error) {
+      setActionError(error.message || 'The update could not be downloaded.')
+    }
   }, [])
 
   const handleInstall = useCallback(async () => {
     setInstalling(true)
+    setActionError('')
     try {
-      await window.posApi.updater.installNow()
-    } catch {
+      const result = await window.posApi.updater.installNow()
+      if (!result?.success) {
+        setActionError(result?.error || 'The update could not be installed yet.')
+        setInstalling(false)
+      }
+    } catch (error) {
+      setActionError(error.message || 'The update could not be installed yet.')
       setInstalling(false)
     }
   }, [])
 
-  const handleDismiss = useCallback(() => setDismissed(true), [])
+  if (!isElectron) return null
 
-  const visible =
-    !dismissed &&
-    updateState &&
-    ['available', 'downloading', 'downloaded'].includes(updateState.status)
-
+  const status = updateState?.status
+  const visible = !dismissed && ['available', 'downloading', 'downloaded'].includes(status)
   if (!visible) return null
 
-  const { status, version, progress } = updateState
+  const version = updateState.version || ''
+  const progress = Math.max(0, Math.min(100, Number(updateState.progress) || 0))
+  const icon = status === 'downloaded'
+    ? <CheckCircle2 size={20} aria-hidden="true" />
+    : status === 'downloading'
+      ? <Download size={20} aria-hidden="true" />
+      : <BellRing size={20} aria-hidden="true" />
 
   return (
-    <div className="update-notifier" role="alert" aria-live="polite">
-      <div className="update-notifier__icon">
-        {status === 'downloading' ? '⬇️' : status === 'downloaded' ? '✅' : '🔔'}
-      </div>
-
+    <section className="update-notifier" role="status" aria-live="polite" aria-label="RestaurantOS update">
+      <div className="update-notifier__icon">{icon}</div>
       <div className="update-notifier__body">
         {status === 'available' && (
           <>
-            <span className="update-notifier__title">Update Available — v{version}</span>
-            <span className="update-notifier__sub">
-              Background mein download ho raha hai, kaam karte raho…
-            </span>
+            <strong className="update-notifier__title">New update available (v{version}) / Naya update available hai</strong>
+            <span className="update-notifier__sub">Current version: v{updateState.currentVersion || '—'}</span>
           </>
         )}
-
         {status === 'downloading' && (
           <>
-            <span className="update-notifier__title">Update Download Ho Raha Hai — v{version}</span>
-            <div className="update-notifier__progress-track">
-              <div
-                className="update-notifier__progress-fill"
-                style={{ width: `${progress ?? 0}%` }}
-              />
+            <strong className="update-notifier__title">Downloading update (v{version}) / Update download ho raha hai</strong>
+            <div className="update-notifier__progress-track" role="progressbar" aria-label="Update download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}>
+              <div className="update-notifier__progress-fill" style={{ width: `${progress}%` }} />
             </div>
-            <span className="update-notifier__sub">{progress ?? 0}% complete</span>
+            <span className="update-notifier__sub">{progress}% complete</span>
           </>
         )}
-
         {status === 'downloaded' && (
           <>
-            <span className="update-notifier__title">✅ Update Ready! — v{version}</span>
-            <span className="update-notifier__sub">
-              Nayi version tayyar hai. Restart karein to install ho jaye.
-            </span>
+            <strong className="update-notifier__title">Update ready (v{version}) / Naya version tayyar hai</strong>
+            <span className="update-notifier__sub">Restart when it suits your shift / Apni sahulat se restart karein.</span>
           </>
         )}
+        {actionError && <span className="update-notifier__error" role="alert">{actionError}</span>}
       </div>
-
       <div className="update-notifier__actions">
-        {status === 'downloaded' && (
-          <button
-            id="btn-restart-update"
-            className="update-notifier__btn update-notifier__btn--primary"
-            onClick={handleInstall}
-            disabled={installing}
-          >
-            {installing ? '⏳ Restarting…' : '🔄 Restart & Install'}
+        {status === 'available' && (
+          <button className="update-notifier__btn update-notifier__btn--primary" onClick={handleDownload}>
+            Update Now / Abhi Update Karein
           </button>
         )}
-        <button
-          id="btn-dismiss-update"
-          className="update-notifier__btn update-notifier__btn--ghost"
-          onClick={handleDismiss}
-          aria-label="Dismiss"
-          title="Baad mein"
-        >
-          ✕
+        {status === 'downloaded' && (
+          <button className="update-notifier__btn update-notifier__btn--primary" onClick={handleInstall} disabled={installing}>
+            {installing ? 'Restarting…' : 'Restart to install / Restart karein'}
+          </button>
+        )}
+        <button className="update-notifier__btn update-notifier__btn--ghost" onClick={() => setDismissed(true)}>
+          Later / Baad Mein
         </button>
       </div>
-    </div>
+    </section>
   )
 }

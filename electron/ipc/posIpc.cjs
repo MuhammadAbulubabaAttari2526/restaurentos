@@ -6,6 +6,7 @@
 
 const { ipcMain } = require('electron')
 const { runLocalOperation } = require('../../database/repositories/localOperations.cjs')
+const { beginActivity } = require('../activityMonitor.cjs')
 
 let _registered = false
 
@@ -20,7 +21,12 @@ function registerPosIpc() {
     if (!name || typeof name !== 'string') {
       throw new Error('operation name must be a non-empty string')
     }
-    return runLocalOperation(restaurantId, name, payload)
+    const finishActivity = beginActivity()
+    try {
+      return await runLocalOperation(restaurantId, name, payload)
+    } finally {
+      finishActivity()
+    }
   })
 }
 

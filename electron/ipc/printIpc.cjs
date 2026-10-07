@@ -19,6 +19,7 @@ const { formatReceipt } = require('../../printing/receiptFormatter.cjs')
 const { formatKot } = require('../../printing/kotFormatter.cjs')
 const { printBuffer, listWindowsPrinters } = require('../../printing/printerManager.cjs')
 const { builder } = require('../../printing/escpos.cjs')
+const { beginActivity } = require('../activityMonitor.cjs')
 
 let _registered = false
 
@@ -70,6 +71,8 @@ function registerPrintIpc() {
    * payload: { restaurantId, orderId, printerId? }
    */
   ipcMain.handle('print:receipt', async (_, payload) => {
+    const finishActivity = beginActivity()
+    try {
     const { restaurantId, orderId, printerId, openCashDrawer = false } = payload || {}
     if (!restaurantId || !orderId) throw new Error('restaurantId and orderId are required')
 
@@ -97,6 +100,9 @@ function registerPrintIpc() {
 
     await printBuffer(buf, printer)
     return { success: true, bytesWritten: buf.length }
+    } finally {
+      finishActivity()
+    }
   })
 
   /**
@@ -104,6 +110,8 @@ function registerPrintIpc() {
    * payload: { restaurantId, orderId, printerId? }
    */
   ipcMain.handle('print:kot', async (_, payload) => {
+    const finishActivity = beginActivity()
+    try {
     const { restaurantId, orderId, printerId, kotLabel } = payload || {}
     if (!restaurantId || !orderId) throw new Error('restaurantId and orderId are required')
 
@@ -123,6 +131,9 @@ function registerPrintIpc() {
 
     await printBuffer(buf, printer)
     return { success: true, bytesWritten: buf.length }
+    } finally {
+      finishActivity()
+    }
   })
 
   /**
@@ -130,6 +141,8 @@ function registerPrintIpc() {
    * payload: { restaurantId, printerId? }
    */
   ipcMain.handle('print:test', async (_, payload) => {
+    const finishActivity = beginActivity()
+    try {
     const { restaurantId, printerId } = payload || {}
     if (!restaurantId) throw new Error('restaurantId is required')
 
@@ -155,6 +168,9 @@ function registerPrintIpc() {
 
     await printBuffer(b.build(), printer)
     return { success: true }
+    } finally {
+      finishActivity()
+    }
   })
 
   /**
