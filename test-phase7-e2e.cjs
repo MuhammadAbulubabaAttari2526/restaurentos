@@ -86,17 +86,31 @@ app.whenReady().then(async () => {
 
     // Setup mock remote transport for sync worker
     const mockRemote = new Map()
-    syncWorker.setCredentials({ projectId: 'mock-p7', authToken: 'mock-token', restaurantId: restId })
-    firestoreRest.writeDoc = async (params) => {
-      const key = typeof params === 'string' ? params : `restaurants/${params.restaurantId}/${params.collection}/${params.docId}`
-      const val = typeof params === 'string' ? arguments[1] : params.data
-      mockRemote.set(key, val)
-      return { success: true }
+    syncWorker.projectId = 'mock-p7'
+    syncWorker.authToken = 'mock-token'
+    syncWorker.restaurantId = restId
+    firestoreRest.readDoc = async ({ restaurantId, collection, docId }) => {
+      const key = `restaurants/${restaurantId}/${collection}/${docId}`
+      const data = mockRemote.get(key)
+      return data ? { id: docId, data, updateTime: data.updatedAt } : null
     }
-    firestoreRest.deleteDoc = async (params) => {
-      const key = typeof params === 'string' ? params : `restaurants/${params.restaurantId}/${params.collection}/${params.docId}`
-      mockRemote.delete(key)
-      return { success: true }
+    firestoreRest.buildUpdateWrite = (params) => ({
+      key: `restaurants/${params.restaurantId}/${params.collection}/${params.docId}`,
+      data: params.data,
+      exists: params.exists,
+      updateTime: params.updateTime,
+    })
+    firestoreRest.commitWrites = async ({ writes }) => {
+      for (const write of writes) {
+        const previous = mockRemote.get(write.key) || {}
+        mockRemote.set(write.key, {
+          ...previous,
+          ...write.data,
+          createdAt: previous.createdAt || new Date(Date.now() - 1000).toISOString(),
+          updatedAt: new Date(Date.now() - 1000).toISOString(),
+        })
+      }
+      return { writeResults: writes.map(() => ({})) }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -314,8 +328,8 @@ app.whenReady().then(async () => {
       networkMonitor.setMockStatus(true)
       await syncWorker.processQueue(50)
 
-      const remoteDeleted = mockRemote.has(`restaurants/${restId}/categories/cat_t7_temp`)
-      assert.strictEqual(remoteDeleted, false, 'Deleted record removed from remote sync')
+      const remoteDeleted = mockRemote.get(`restaurants/${restId}/categories/cat_t7_temp`)
+      assert(remoteDeleted?.deletedAt, 'Soft-delete tombstone is present in remote record')
 
       recordTest(7, 'Offline item/record delete -> online sync', true, 'Soft-delete mutation pushed cleanly to remote')
     } catch (err) {
@@ -354,34 +368,34 @@ app.whenReady().then(async () => {
       const initialOrderCount = activeDb.prepare('SELECT COUNT(*) as cnt FROM orders WHERE restaurant_id = ?').get(restId).cnt
       assert(initialOrderCount > 0, 'Existing orders present before update')
 
-      // Create temporary migration 005 dynamically
+      // Create temporary migration 007 dynamically
       const migrationsDir = path.join(__dirname, 'database', 'migrations')
-      const m5File = path.join(migrationsDir, '005_test_feature_table.sql')
+      const m7File = path.join(migrationsDir, '007_test_feature_table.sql')
       fs.writeFileSync(
-        m5File,
+        m7File,
         'CREATE TABLE IF NOT EXISTS test_feature_table (id TEXT PRIMARY KEY, name TEXT);\n'
       )
 
       // Run migration
       runMigrations(activeDb)
 
-      // Verify v5 recorded
-      const v5Row = activeDb.prepare('SELECT version FROM schema_version WHERE version = 5').get()
-      assert(v5Row, 'Migration 005 applied successfully')
+      // Verify v7 recorded
+      const v7Row = activeDb.prepare('SELECT version FROM schema_version WHERE version = 7').get()
+      assert(v7Row, 'Migration 007 applied successfully')
 
       // Verify pre-migration backup was created
       const backups = backupManager.listBackups()
-      const preMig5 = backups.find((b) => b.filename.includes('before-v4-to-v5'))
-      assert(preMig5, 'Pre-migration backup before-v4-to-v5 was generated')
+      const preMig7 = backups.find((b) => b.filename.includes('before-v6-to-v7'))
+      assert(preMig7, 'Pre-migration backup before-v6-to-v7 was generated')
 
       // Verify existing orders and tables are 100% safe
       const postOrderCount = activeDb.prepare('SELECT COUNT(*) as cnt FROM orders WHERE restaurant_id = ?').get(restId).cnt
       assert.strictEqual(postOrderCount, initialOrderCount, 'All pre-existing orders remain intact')
 
-      // Reset migration 005 entry and delete file so clean for subsequent runs
+      // Reset migration 007 entry and delete file so clean for subsequent runs
       activeDb.exec('DROP TABLE IF EXISTS test_feature_table;')
-      activeDb.prepare('DELETE FROM schema_version WHERE version = 5').run()
-      fs.unlinkSync(m5File)
+      activeDb.prepare('DELETE FROM schema_version WHERE version = 7').run()
+      fs.unlinkSync(m7File)
 
       recordTest(9, 'App update simulation: backup created, migration applied, existing data intact', true, 'Backup created and old orders 100% preserved')
     } catch (err) {

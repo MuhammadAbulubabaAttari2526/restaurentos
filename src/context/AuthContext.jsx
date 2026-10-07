@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
+import { onIdTokenChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
 import { doc, getDoc } from 'firebase/firestore'
 import { auth, db, firebaseConfigured } from '../lib/firebase.js'
 import { activateDemoSession, clearDemoSession, demoMembership, demoUser, isDemoSession } from '../services/demoData.js'
@@ -30,7 +30,21 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     if (isDemoSession()) return undefined
     if (!auth || !db) return undefined
-    return onAuthStateChanged(auth, async (nextUser) => {
+    let activeUid = null
+    let activeMembership = null
+
+    async function updateSyncCredentials(nextUser, nextMembership, forceRefresh = false) {
+      if (!window.posApi?.sync || !nextMembership?.restaurantId) return
+      const token = await nextUser.getIdTokenResult(forceRefresh)
+      await window.posApi.sync.setCredentials({
+        projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+        authToken: token.token,
+        expiresAt: token.expirationTime,
+        restaurantId: nextMembership.restaurantId,
+      })
+    }
+
+    const unsubscribe = onIdTokenChanged(auth, async (nextUser) => {
       if (isDemoSession()) {
         setUser(demoUser)
         setMembership(demoMembership)
@@ -39,27 +53,50 @@ export function AuthProvider({ children }) {
       }
       setLoading(true)
       setUser(nextUser)
+      if (!nextUser) {
+        activeUid = null
+        activeMembership = null
+        setMembership(null)
+        setLoading(false)
+        return
+      }
+
+      if (activeUid === nextUser.uid && activeMembership) {
+        setMembership(activeMembership)
+        try {
+          await updateSyncCredentials(nextUser, activeMembership)
+        } catch {}
+        setLoading(false)
+        return
+      }
+
       try {
-        const mem = nextUser ? await getMembership(nextUser) : null
+        const mem = await getMembership(nextUser)
+        activeUid = nextUser.uid
+        activeMembership = mem
         setMembership(mem)
         if (mem?.restaurantId) {
           window.sessionStorage.setItem('activeRestaurantId', mem.restaurantId)
-          if (typeof window !== 'undefined' && window.posApi?.sync) {
-            nextUser.getIdToken().then((token) => {
-              window.posApi.sync.setCredentials({
-                projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-                authToken: token,
-                restaurantId: mem.restaurantId,
-              })
-            }).catch(() => {})
-          }
+          window.sessionStorage.setItem('activeUserId', nextUser.uid)
+          await updateSyncCredentials(nextUser, mem)
         }
       } catch {
-        setMembership(null)
+        if (activeUid !== nextUser.uid) setMembership(null)
       } finally {
         setLoading(false)
       }
     })
+
+    const refreshInterval = setInterval(() => {
+      if (auth.currentUser && activeMembership) {
+        updateSyncCredentials(auth.currentUser, activeMembership, true).catch(() => {})
+      }
+    }, 45 * 60 * 1000)
+
+    return () => {
+      unsubscribe()
+      clearInterval(refreshInterval)
+    }
   }, [])
 
   async function login(email, password) {
@@ -98,6 +135,7 @@ export function AuthProvider({ children }) {
 
   async function logout() {
     clearDemoSession()
+    window.sessionStorage.removeItem('activeUserId')
     setUser(null)
     setMembership(null)
     if (auth) await signOut(auth)

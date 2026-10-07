@@ -9,9 +9,11 @@
  * All writes add a corresponding sync_queue entry within the same SQLite transaction.
  */
 
+const EventEmitter = require('events')
 const { getDb } = require('../sqliteClient.cjs')
 const { getEntry } = require('./collectionRegistry.cjs')
-const { now, makeId } = require('./helpers.cjs')
+const { now, toIso, makeId } = require('./helpers.cjs')
+const localWriteEvents = new EventEmitter()
 
 // ─── SYNC QUEUE HELPERS ───────────────────────────────────────────────────────
 
@@ -160,6 +162,11 @@ function upsert(restaurantId, collection, values, id) {
   const existingJs = existing ? fromRow(existing) : {}
   const merged = { ...existingJs, ...values }
   const row = toRow(restaurantId, recordId, merged)
+  row.uuid = existing?.uuid || merged.uuid || recordId
+  row.sync_status = 'pending'
+  row.updated_at = row.updated_at || now()
+  row.synced = 0
+  row.deleted = merged.deletedAt ? 1 : 0
 
   const cols = Object.keys(row)
   const placeholders = cols.map(() => '?').join(', ')
@@ -171,7 +178,14 @@ function upsert(restaurantId, collection, values, id) {
     ON CONFLICT(${pkCol}) DO UPDATE SET ${updates}
   `
 
-  const syncPayload = { id: recordId, restaurantId, ...merged }
+  const syncPayload = {
+    id: recordId,
+    uuid: row.uuid,
+    restaurantId,
+    ...merged,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at || null,
+  }
   const action = existing ? 'update' : 'set'
 
   const transact = db.transaction(() => {
@@ -179,6 +193,7 @@ function upsert(restaurantId, collection, values, id) {
     insertSyncQueueEntry(db, restaurantId, collection, recordId, action, syncPayload)
   })
   transact()
+  localWriteEvents.emit('write', { restaurantId, collection, recordId })
 
   return recordId
 }
@@ -189,21 +204,27 @@ function softDelete(restaurantId, collection, id) {
   const db = getDb()
   const { table } = getEntry(collection)
 
-  // audit_logs and stock_movements have no deleted_at; just mark sync
-  const hasDeletedAt = !['stock_movements', 'audit_logs', 'counters', 'printers'].includes(table)
   const pkCol = table === 'order_financials' ? 'order_id' : 'id'
   const ts = now()
+  const existing = db.prepare(
+    `SELECT uuid FROM ${table} WHERE ${pkCol} = ? AND restaurant_id = ?`
+  ).get(id, restaurantId)
 
   const transact = db.transaction(() => {
-    if (hasDeletedAt) {
-      db.prepare(
-        `UPDATE ${table} SET deleted_at = ?, updated_at = ?, sync_status = 'pending'
-         WHERE ${pkCol} = ? AND restaurant_id = ?`
-      ).run(ts, ts, id, restaurantId)
-    }
-    insertSyncQueueEntry(db, restaurantId, collection, id, 'delete', { id, restaurantId, deletedAt: ts })
+    db.prepare(
+      `UPDATE ${table} SET deleted_at = ?, updated_at = ?, sync_status = 'pending', synced = 0, deleted = 1
+       WHERE ${pkCol} = ? AND restaurant_id = ?`
+    ).run(ts, ts, id, restaurantId)
+    insertSyncQueueEntry(db, restaurantId, collection, id, 'delete', {
+      id,
+      uuid: existing?.uuid || id,
+      restaurantId,
+      deletedAt: ts,
+      updatedAt: ts,
+    })
   })
   transact()
+  localWriteEvents.emit('write', { restaurantId, collection, recordId: id })
 }
 
 // ─── BULK UPSERT (used by initial Firestore import) ───────────────────────────
@@ -218,7 +239,15 @@ function bulkUpsertSynced(restaurantId, collection, records) {
     for (const record of records) {
       const rid = record.id || record.orderId
       if (!rid) continue
+      const current = db.prepare(`SELECT * FROM ${table} WHERE ${pkCol} = ? AND restaurant_id = ?`).get(rid, restaurantId)
+      const remoteUpdatedAt = record.updatedAt ? toIso(record.updatedAt) : ''
+      if (current && (!remoteUpdatedAt || current.updated_at >= remoteUpdatedAt)) continue
       const row = toRow(restaurantId, rid, { ...record, syncStatus: 'synced' })
+      row.uuid = record.uuid || rid
+      row.updated_at = remoteUpdatedAt || row.updated_at || now()
+      row.synced = 1
+      row.deleted = record.deletedAt ? 1 : 0
+      if (Object.hasOwn(row, 'deleted_at')) row.deleted_at = record.deletedAt ? toIso(record.deletedAt) : null
       const cols = Object.keys(row)
       const placeholders = cols.map(() => '?').join(', ')
       const updates = cols.filter((c) => c !== pkCol).map((c) => `${c} = excluded.${c}`).join(', ')
@@ -232,4 +261,14 @@ function bulkUpsertSynced(restaurantId, collection, records) {
   transact()
 }
 
-module.exports = { query, getById, upsert, softDelete, bulkUpsertSynced }
+module.exports = {
+  query,
+  getById,
+  upsert,
+  softDelete,
+  bulkUpsertSynced,
+  onLocalWrite: (listener) => {
+    localWriteEvents.on('write', listener)
+    return () => localWriteEvents.off('write', listener)
+  },
+}

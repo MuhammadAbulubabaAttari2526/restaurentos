@@ -140,7 +140,13 @@ export async function runOperation(name, payload = {}) {
       window.sessionStorage.getItem('activeRestaurantId') ||
       'default'
 
-    const result = await window.posApi.pos.runOperation(restaurantId, name, payload)
+    const actorId = window.sessionStorage.getItem('activeUserId')
+    const localPayload = {
+      ...payload,
+      createdBy: payload.createdBy || actorId,
+      recordedBy: payload.recordedBy || actorId,
+    }
+    const result = await window.posApi.pos.runOperation(restaurantId, name, localPayload)
     notifyAllWatchers()
     return result
   }

@@ -174,6 +174,74 @@ function getBaseUrl(projectId) {
   return `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`
 }
 
+function getDocumentName(projectId, restaurantId, collection, docId) {
+  return `${getBaseUrl(projectId)}/restaurants/${restaurantId}/${collection}/${docId}`
+}
+
+async function readDoc({ projectId, authToken, restaurantId, collection, docId }) {
+  const headers = {}
+  if (authToken) headers.Authorization = `Bearer ${authToken}`
+
+  try {
+    const result = await httpRequest({
+      url: getDocumentName(projectId, restaurantId, collection, docId),
+      method: 'GET',
+      headers,
+    })
+    return {
+      id: docId,
+      data: decodeFields(result.fields),
+      updateTime: result.updateTime || null,
+    }
+  } catch (error) {
+    if (error.status === 404) return null
+    throw error
+  }
+}
+
+function buildUpdateWrite({ projectId, restaurantId, collection, docId, data, updateTime, exists }) {
+  const fields = { ...data }
+  delete fields.updatedAt
+  const serverCreatedAt = exists === false && ['orders', 'orderFinancials', 'payments', 'inventory', 'stockMovements'].includes(collection)
+  if (serverCreatedAt) delete fields.createdAt
+
+  const write = {
+    update: {
+      name: getDocumentName(projectId, restaurantId, collection, docId),
+      fields: encodeFields(fields),
+    },
+    updateMask: { fieldPaths: Object.keys(fields) },
+    updateTransforms: [
+      { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+    ],
+  }
+
+  if (serverCreatedAt) {
+    write.updateTransforms.push({ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' })
+  }
+  if (exists === false) {
+    write.currentDocument = { exists: false }
+  } else if (updateTime) {
+    write.currentDocument = { updateTime }
+  }
+
+  return write
+}
+
+async function commitWrites({ projectId, authToken, writes }) {
+  if (!projectId || !Array.isArray(writes) || writes.length === 0 || writes.length > 500) {
+    throw new Error('commitWrites requires 1-500 writes and a projectId.')
+  }
+
+  const headers = {}
+  if (authToken) headers.Authorization = `Bearer ${authToken}`
+  return httpRequest({
+    url: `${getBaseUrl(projectId)}:commit`,
+    method: 'POST',
+    headers,
+  }, { writes })
+}
+
 /**
  * Writes (sets/updates) a Firestore document
  */
@@ -252,8 +320,8 @@ async function queryUpdatedSince({
       ? {
           fieldFilter: {
             field: { fieldPath: 'updatedAt' },
-            op: 'GREATER_THAN',
-            value: { stringValue: sinceIsoString },
+            op: 'GREATER_THAN_OR_EQUAL',
+            value: { timestampValue: new Date(sinceIsoString).toISOString() },
           },
         }
       : undefined,
@@ -308,6 +376,9 @@ module.exports = {
   decodeValue,
   encodeFields,
   decodeFields,
+  readDoc,
+  buildUpdateWrite,
+  commitWrites,
   writeDoc,
   deleteDoc,
   queryUpdatedSince,

@@ -234,7 +234,7 @@ app.whenReady().then(async () => {
 
     // ─── T6: SyncWorker Push Failure and Retries ─────────────────────────
     console.log('\n[Suite 5: SyncWorker Error & Retry Handling]')
-    await itAsync('handles network errors by incrementing retry_count and saving error', async () => {
+    await itAsync('keeps network failures pending without incrementing retry_count', async () => {
       const failItemId = genericRepository.upsert(testRestaurantId, 'menuItems', {
         name: 'Failure Test Dish',
         price: 100,
@@ -250,8 +250,9 @@ app.whenReady().then(async () => {
       const failQueueItem = db
         .prepare('SELECT * FROM sync_queue WHERE record_id = ?')
         .get(failItemId)
-      assert.strictEqual(failQueueItem.status, 'failed', 'item marked failed')
-      assert.strictEqual(failQueueItem.retry_count, 1, 'retry_count is 1')
+      assert.strictEqual(failQueueItem.status, 'pending', 'item remains queued for retry')
+      assert.strictEqual(failQueueItem.retry_count, 0, 'network failure does not increment retry_count')
+      assert(failQueueItem.last_error.startsWith('TRANSIENT:'), 'transient failure is identified')
       assert(failQueueItem.last_error.includes('503 Service Unavailable'), 'last_error logged')
       assert(worker.getStatus().lastError.includes('503 Service Unavailable'))
     })

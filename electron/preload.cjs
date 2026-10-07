@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('posApi', {
   sync: {
     getStatus:       () => ipcRenderer.invoke('sync:getStatus'),
     trigger:         () => ipcRenderer.invoke('sync:trigger'),
+    checkNetwork:    () => ipcRenderer.invoke('sync:checkNetwork'),
     setCredentials:  (creds) => ipcRenderer.invoke('sync:setCredentials', creds),
     getPendingCount: () => ipcRenderer.invoke('sync:getPendingCount'),
     onStatusChange:  (callback) => {
@@ -81,6 +82,7 @@ contextBridge.exposeInMainWorld('posApi', {
   updater: {
     getStatus:  () => ipcRenderer.invoke('updater:getStatus'),
     checkNow:   () => ipcRenderer.invoke('updater:check'),
+    download:   () => ipcRenderer.invoke('updater:download'),
     installNow: () => ipcRenderer.invoke('updater:installNow'),
     // onStatusChange not needed here — wired below via ipcRenderer.on
   },
