@@ -44,6 +44,7 @@ export function ReceiptDialog({ order, restaurantName = 'Restaurant', currency =
             <div><span>Date</span><strong>{formatReceiptDate(order.createdAt)}</strong></div>
             <div><span>Order type</span><strong>{(order.type || 'dine-in').replaceAll('-', ' ')}</strong></div>
             {order.tableName && <div><span>Table</span><strong>{order.tableName}</strong></div>}
+            {order.waiterName && <div><span>Waiter</span><strong>{order.waiterName}</strong></div>}
           </div>
 
           <div className="receipt-items-heading"><span>ITEM</span><span>AMOUNT</span></div>

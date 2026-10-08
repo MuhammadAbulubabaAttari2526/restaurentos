@@ -34,8 +34,10 @@ function getDb() {
   _db.pragma('temp_store = MEMORY')
   _db.pragma('mmap_size = 134217728') // 128 MB mmap
 
-  // Run pending migrations
-  runMigrations(_db)
+  // Migrations ship inside the application archive. Resolve from app.getAppPath()
+  // so production never depends on the process working directory.
+  const migrationsDir = path.join(app.getAppPath(), 'database', 'migrations')
+  runMigrations(_db, migrationsDir)
 
   console.log('[DB] Database ready.')
   return _db

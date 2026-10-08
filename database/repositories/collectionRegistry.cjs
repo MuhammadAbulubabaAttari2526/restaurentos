@@ -187,6 +187,8 @@ function ordersToRow(restaurantId, id, v) {
     table_id: v.tableId || null,
     table_name: v.tableName || '',
     covers: v.covers != null ? Number(v.covers) : null,
+    waiter_id: v.waiterId || null,
+    waiter_name: v.waiterName || '',
     note: v.note || '',
     items_json: toJson(v.items || []),
     status: v.status || 'queued',
@@ -207,6 +209,8 @@ function ordersFromRow(row) {
     tableId: row.table_id,
     tableName: row.table_name,
     covers: row.covers,
+    waiterId: row.waiter_id || null,
+    waiterName: row.waiter_name || '',
     note: row.note,
     items: parseJson(row.items_json, []),
     status: row.status,
@@ -568,6 +572,30 @@ function printersFromRow(row) {
   }
 }
 
+// ─── WAITERS ─────────────────────────────────────────────────────────────────
+function waitersToRow(restaurantId, id, v) {
+  return {
+    id,
+    restaurant_id: restaurantId,
+    name: v.name || '',
+    phone: v.phone || '',
+    status: v.status || 'active',
+    created_at: toIso(v.createdAt) || now(),
+    updated_at: now(),
+    deleted_at: v.deletedAt ? toIso(v.deletedAt) : null,
+    sync_status: v.syncStatus || 'synced',
+    version: (v.version || 0) + 1,
+  }
+}
+function waitersFromRow(row) {
+  return {
+    ...baseFrom(row),
+    name: row.name,
+    phone: row.phone,
+    status: row.status,
+  }
+}
+
 // ─── COLLECTION REGISTRY ─────────────────────────────────────────────────────
 const REGISTRY = {
   settings:        { table: 'settings',        toRow: settingsToRow,        fromRow: settingsFromRow        },
@@ -579,6 +607,7 @@ const REGISTRY = {
   orderFinancials: { table: 'order_financials',toRow: orderFinancialsToRow, fromRow: orderFinancialsFromRow },
   payments:        { table: 'payments',        toRow: paymentsToRow,        fromRow: paymentsFromRow        },
   customers:       { table: 'customers',       toRow: customersToRow,       fromRow: customersFromRow       },
+  waiters:         { table: 'waiters',         toRow: waitersToRow,         fromRow: waitersFromRow         },
   inventory:       { table: 'inventory',       toRow: inventoryToRow,       fromRow: inventoryFromRow       },
   inventoryItems:  { table: 'inventory',       toRow: inventoryToRow,       fromRow: inventoryFromRow       },
   stockMovements:  { table: 'stock_movements', toRow: stockMovementsToRow,  fromRow: stockMovementsFromRow  },

@@ -94,6 +94,13 @@ function runLocalOperation(restaurantId, name, payload = {}) {
         if (cust) customerName = cust.name || ''
       }
 
+      let waiterName = ''
+      if (payload.waiterId) {
+        const waiter = genericRepository.getById(restaurantId, 'waiters', payload.waiterId)
+        if (!waiter || waiter.status === 'inactive') throw new Error('Choose an active waiter or clear the waiter selection.')
+        waiterName = waiter.name || ''
+      }
+
       const orderRecord = {
         id: orderId,
         restaurantId,
@@ -101,8 +108,11 @@ function runLocalOperation(restaurantId, name, payload = {}) {
         type: payload.type || 'dine-in',
         tableId: payload.tableId || null,
         tableName,
+        waiterId: payload.waiterId || null,
+        waiterName,
         customerId: payload.customerId || null,
         customerName,
+        createdBy: payload.createdBy || '',
         items: pricedLines,
         status: payload.status || 'queued',
         paymentStatus: 'unpaid',

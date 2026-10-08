@@ -5,7 +5,7 @@ const isElectron = typeof window !== 'undefined' && window.posApi?.isElectron
 
 export function UpdateNotifier() {
   const [updateState, setUpdateState] = useState(null)
-  const [dismissed, setDismissed] = useState(false)
+  const [dismissedVersion, setDismissedVersion] = useState('')
   const [installing, setInstalling] = useState(false)
   const [actionError, setActionError] = useState('')
 
@@ -21,7 +21,7 @@ export function UpdateNotifier() {
       if (!event.detail?.status) return
       setUpdateState(event.detail)
       setActionError('')
-      if (event.detail.status === 'downloaded') setDismissed(false)
+      if (event.detail.status === 'downloaded') setDismissedVersion('')
     }
     window.addEventListener('updater:status-changed', handleUpdateStatus)
     return () => {
@@ -69,10 +69,11 @@ export function UpdateNotifier() {
   if (!isElectron) return null
 
   const status = updateState?.status
-  const visible = !dismissed && ['available', 'downloading', 'downloaded'].includes(status)
+  const version = updateState?.version || ''
+  const visible = ['available', 'downloading', 'downloaded'].includes(status)
+    && dismissedVersion !== version
   if (!visible) return null
 
-  const version = updateState.version || ''
   const progress = Math.max(0, Math.min(100, Number(updateState.progress) || 0))
   const icon = status === 'downloaded'
     ? <CheckCircle2 size={20} aria-hidden="true" />
@@ -118,7 +119,7 @@ export function UpdateNotifier() {
             {installing ? 'Restarting…' : 'Restart to install / Restart karein'}
           </button>
         )}
-        <button className="update-notifier__btn update-notifier__btn--ghost" onClick={() => setDismissed(true)}>
+        <button className="update-notifier__btn update-notifier__btn--ghost" onClick={() => setDismissedVersion(version)}>
           Later / Baad Mein
         </button>
       </div>

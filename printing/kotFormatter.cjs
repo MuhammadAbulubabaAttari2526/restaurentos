@@ -53,6 +53,10 @@ function buildKot({ order, printer = {}, options = {} }) {
     b.bold(false)
   }
 
+  if (order.waiterName) {
+    b.row('WAITER:', order.waiterName.toUpperCase())
+  }
+
   if (order.dineInCoverCount > 1) {
     b.row('Covers:', String(order.dineInCoverCount))
   }

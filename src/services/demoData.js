@@ -147,6 +147,11 @@ function createDemoRecords() {
     reservations: [
       { id: 'reservation-demo-1', tableId: 'table-2', tableName: 'Table 2', guestName: 'Farah Malik', phone: '+92 301 555 1234', covers: 2, startsAt: minutesAgo(-90), endsAt: minutesAgo(-210), status: 'booked', createdBy: demoUser.uid, createdAt: minutesAgo(60) },
     ],
+    waiters: [
+      { id: 'waiter-demo-1', name: 'Rashid Khan', phone: '+92 300 1234567', status: 'active', createdAt: daysAgo(20) },
+      { id: 'waiter-demo-2', name: 'Zubair Ahmed', phone: '+92 301 9876543', status: 'active', createdAt: daysAgo(15) },
+      { id: 'waiter-demo-3', name: 'Ali Raza', phone: '+92 333 5558899', status: 'active', createdAt: daysAgo(10) },
+    ],
     draftOrders: [],
     operationKeys: [],
     staffInvitations: [],
@@ -347,6 +352,8 @@ export async function runDemoOperation(name, payload = {}) {
       const settings = demoRecords.settings[0]
       const taxCents = Math.round((subtotalCents - discountCents) * settings.taxRate)
       const table = payload.tableId ? demoRecords.tables.find((entry) => entry.id === payload.tableId) : null
+      const waiter = payload.waiterId ? demoRecords.waiters.find((entry) => entry.id === payload.waiterId && entry.status !== 'inactive') : null
+      if (payload.waiterId && !waiter) throw new Error('Choose an active waiter or clear the waiter selection.')
       const reservation = table?.currentReservationId
         ? demoRecords.reservations.find((entry) => entry.id === table.currentReservationId)
         : null
@@ -366,7 +373,7 @@ export async function runDemoOperation(name, payload = {}) {
       }
       const sequence = demoRecords.orders.length + 1
       const orderNumber = `D-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${String(sequence).padStart(3, '0')}`
-      const order = { id, restaurantId: DEMO_RESTAURANT_ID, orderNumber, type: payload.type, tableId: table?.id || null, tableName: table?.name || '', ...(payload.type === 'dine-in' ? { covers } : {}), note: payload.note || '', items: items.map(({ itemId, name, quantity, note, selectedVariant, selectedAddOns }) => ({ itemId, name, quantity, note, selectedVariant: selectedVariant?.name || '', selectedAddOns: selectedAddOns.map((option) => option.name) })), status: 'queued', paymentStatus: 'unpaid', createdBy: demoUser.uid, createdAt: now, updatedAt: now }
+      const order = { id, restaurantId: DEMO_RESTAURANT_ID, orderNumber, type: payload.type, tableId: table?.id || null, tableName: table?.name || '', waiterId: waiter?.id || null, waiterName: waiter?.name || '', ...(payload.type === 'dine-in' ? { covers } : {}), note: payload.note || '', items: items.map(({ itemId, name, quantity, note, selectedVariant, selectedAddOns }) => ({ itemId, name, quantity, note, selectedVariant: selectedVariant?.name || '', selectedAddOns: selectedAddOns.map((option) => option.name) })), status: 'queued', paymentStatus: 'unpaid', createdBy: demoUser.uid, createdAt: now, updatedAt: now }
       const financial = { id, restaurantId: DEMO_RESTAURANT_ID, orderId: id, customerId: payload.customerId || null, items, subtotalCents, discountCents, taxCents, totalCents: subtotalCents - discountCents + taxCents, paidCents: 0, refundedCents: 0, customerVisitCounted: false, status: 'active', paymentStatus: 'unpaid', createdAt: now, updatedAt: now }
       commit('orders', [order, ...demoRecords.orders])
       commit('orderFinancials', [financial, ...demoRecords.orderFinancials])

@@ -34,6 +34,7 @@ export function writePosDraft(key, draft) {
       || Boolean(String(draft.discount || '').trim())
       || Boolean(draft.tableId)
       || Boolean(draft.customerId)
+      || Boolean(draft.waiterId)
       || Boolean(draft.activeDraftId)
       || draft.orderType !== 'direct-bill'
     if (!hasWorkInProgress) {

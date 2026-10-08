@@ -1,6 +1,22 @@
 -- Migration 006: durable sync metadata for registry-backed collections.
 -- Preserve existing primary keys so deployed Firestore document IDs do not change.
 
+-- Some early desktop builds recorded migration 005 from a test fixture before
+-- the waiter migration shipped. Ensure the base table exists before adding its
+-- durable sync metadata; 007 repairs the waiter columns on those databases.
+CREATE TABLE IF NOT EXISTS waiters (
+  id             TEXT PRIMARY KEY,
+  restaurant_id  TEXT NOT NULL,
+  name           TEXT NOT NULL,
+  phone          TEXT NOT NULL DEFAULT '',
+  status         TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'inactive')),
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  deleted_at     TEXT,
+  sync_status    TEXT NOT NULL DEFAULT 'synced',
+  version        INTEGER NOT NULL DEFAULT 1
+);
+
 ALTER TABLE settings ADD COLUMN uuid TEXT;
 ALTER TABLE settings ADD COLUMN synced INTEGER NOT NULL DEFAULT 1 CHECK (synced IN (0, 1));
 ALTER TABLE settings ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1));

@@ -59,7 +59,7 @@ function initAutoUpdater(onStatusChange) {
   autoUpdater.allowDowngrade = false
 
   autoUpdater.on('checking-for-update', () => {
-    updateState({ status: 'checking', error: null })
+    if (_updateState.status !== 'available') updateState({ status: 'checking', error: null })
   })
 
   autoUpdater.on('update-available', (info) => {
@@ -83,12 +83,13 @@ function initAutoUpdater(onStatusChange) {
 
   autoUpdater.on('error', (error) => {
     const message = error?.message || String(error)
+    const alreadyAvailable = _updateState.status === 'available'
     const downloadFailed = _downloadRequested || _updateState.status === 'downloading'
     _downloadRequested = false
     // An unavailable network or release feed should never interrupt POS use.
     console.warn('[Updater] Update request failed silently:', message)
     updateState({
-      status: downloadFailed && _updateState.version ? 'available' : 'idle',
+      status: (downloadFailed || alreadyAvailable) && _updateState.version ? 'available' : 'idle',
       progress: downloadFailed ? 0 : _updateState.progress,
       error: null,
     })
@@ -108,18 +109,18 @@ function initAutoUpdater(onStatusChange) {
 /** Checks for updates quietly; it never downloads or installs one. */
 async function checkForUpdatesSilently() {
   if (!app.isPackaged || _checkInProgress) return { success: true, data: getUpdateStatus() }
-  if (['available', 'downloading', 'downloaded'].includes(_updateState.status)) {
+  if (['downloading', 'downloaded'].includes(_updateState.status)) {
     return { success: true, data: getUpdateStatus() }
   }
 
   _checkInProgress = true
-  updateState({ status: 'checking', error: null })
+  if (_updateState.status !== 'available') updateState({ status: 'checking', error: null })
   try {
     await autoUpdater.checkForUpdates()
     return { success: true, data: getUpdateStatus() }
   } catch (error) {
     console.warn('[Updater] Check skipped; RestaurantOS will keep working:', error?.message || error)
-    updateState({ status: 'idle', error: null })
+    updateState({ status: _updateState.status === 'available' ? 'available' : 'idle', error: null })
     return { success: false, error: error?.message || 'Update check failed.' }
   } finally {
     _checkInProgress = false

@@ -149,6 +149,7 @@ function PosPage() {
   const canSeeCustomers = ['owner', 'manager', 'cashier'].includes(membership?.role)
   const canDiscount = ['owner', 'manager'].includes(membership?.role) || membership?.permissions?.includes('discounts')
   const { records: customers, truncated: customersTruncated, limit: customersLimit } = useRecords('customers', 150, canSeeCustomers)
+  const { records: waiters, loading: waitersLoading, truncated: waitersTruncated, limit: waitersLimit } = useRecords('waiters', 150)
   const [draftHydrated, setDraftHydrated] = useState(false)
   const [cart, setCart] = useState([])
   const [category, setCategory] = useState('all')
@@ -158,6 +159,7 @@ function PosPage() {
   const [tableId, setTableId] = useState(() => location.state?.tableId || '')
   const [covers, setCovers] = useState(1)
   const [customerId, setCustomerId] = useState('')
+  const [waiterId, setWaiterId] = useState('')
   const [note, setNote] = useState('')
   const [discount, setDiscount] = useState('')
   const [optionItem, setOptionItem] = useState(null)
@@ -180,6 +182,7 @@ function PosPage() {
       setTableId(savedDraft.tableId || location.state?.tableId || '')
       setCovers(Number(savedDraft.covers) || 1)
       setCustomerId(canSeeCustomers ? savedDraft.customerId || '' : '')
+      setWaiterId(savedDraft.waiterId || '')
       setNote(savedDraft.note || '')
       setDiscount(canDiscount ? savedDraft.discount || '' : '')
       setActiveDraftId(savedDraft.activeDraftId || null)
@@ -187,6 +190,10 @@ function PosPage() {
     }
     setDraftHydrated(true)
   }, [canDiscount, canSeeCustomers, draftHydrated, draftStorageKey, location.state?.tableId])
+
+  useEffect(() => {
+    if (!waitersLoading && waiterId && !waiters.some((waiter) => waiter.id === waiterId && waiter.status !== 'inactive')) setWaiterId('')
+  }, [waiters, waitersLoading, waiterId])
   const taxRate = Number(restaurant[0]?.taxRate || 0)
   const subtotalCents = cart.reduce((sum, line) => sum + line.unitPriceCents * line.quantity, 0)
   const discountCents = Math.min(Math.round(Number(discount || 0) * 100) || 0, subtotalCents)
@@ -196,8 +203,8 @@ function PosPage() {
 
   useEffect(() => {
     if (!draftStorageKey) return
-    writePosDraft(draftStorageKey, { cart, orderType, tableId, covers, customerId, note, discount, activeDraftId })
-  }, [draftStorageKey, cart, orderType, tableId, covers, customerId, note, discount, activeDraftId])
+    writePosDraft(draftStorageKey, { cart, orderType, tableId, covers, customerId, waiterId, note, discount, activeDraftId })
+  }, [draftStorageKey, cart, orderType, tableId, covers, customerId, waiterId, note, discount, activeDraftId])
 
   function addHighlightedItem() {
     const item = highlightedItem
@@ -242,6 +249,8 @@ function PosPage() {
         type: orderType,
         tableId: orderType === 'dine-in' ? tableId || null : null,
         customerId: canSeeCustomers ? customerId || null : null,
+        waiterId: waiterId || null,
+        waiterName: waiters.find((waiter) => waiter.id === waiterId)?.name || '',
         discountCents,
         note,
         items: cart.map(({ itemId, quantity, note: itemNote, selectedVariantId, selectedAddOnIds }) => ({ itemId, quantity, note: itemNote, selectedVariantId, selectedAddOnIds })),
@@ -302,7 +311,7 @@ function PosPage() {
           toast.error(`Order created, but the saved draft could not be removed. ${friendlyError(error)}`)
         })
       }
-      writePosDraft(draftStorageKey, { cart: [], orderType: 'direct-bill', tableId: '', covers: 1, customerId: '', note: '', discount: '', activeDraftId: null })
+      writePosDraft(draftStorageKey, { cart: [], orderType: 'direct-bill', tableId: '', covers: 1, customerId: '', waiterId: '', note: '', discount: '', activeDraftId: null })
       toast.success('Order created.')
       const tableName = tables.find((table) => table.id === tableId)?.name || ''
       setReceipt({
@@ -310,6 +319,8 @@ function PosPage() {
         orderNumber: created?.orderNumber || `DB-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`,
         type: orderType,
         tableName,
+        waiterId,
+        waiterName: waiters.find((waiter) => waiter.id === waiterId)?.name || '',
         createdAt: new Date(),
         subtotalCents: created?.subtotalCents ?? totals.subtotalCents,
         discountCents: created?.discountCents ?? totals.discountCents,
@@ -342,6 +353,7 @@ function PosPage() {
       setTableId('')
       setCovers(1)
       setCustomerId('')
+      setWaiterId('')
       setOrderType('direct-bill')
       setActiveDraftId(null)
       setSelectedDraftId('')
@@ -353,11 +365,12 @@ function PosPage() {
     }
   }
 
-  return <div className="pos-page"><PageHeading eyebrow="FRONT OF HOUSE" title="Point of sale" description="Build an order and send it straight to the service team." action={<span className="live-label"><i /> Menu availability is live</span>} /><LimitNotices sources={[{ truncated: itemsTruncated, limit: itemsLimit, label: 'menu items' }, { truncated: categoriesTruncated, limit: categoriesLimit, label: 'categories' }, { truncated: customersTruncated, limit: customersLimit, label: 'customers' }, { truncated: draftsTruncated, limit: draftsLimit, label: 'draft orders' }, { truncated: tablesTruncated, limit: tablesLimit, label: 'tables' }]} />
+  return <div className="pos-page"><PageHeading eyebrow="FRONT OF HOUSE" title="Point of sale" description="Build an order and send it straight to the service team." action={<span className="live-label"><i /> Menu availability is live</span>} /><LimitNotices sources={[{ truncated: itemsTruncated, limit: itemsLimit, label: 'menu items' }, { truncated: categoriesTruncated, limit: categoriesLimit, label: 'categories' }, { truncated: customersTruncated, limit: customersLimit, label: 'customers' }, { truncated: draftsTruncated, limit: draftsLimit, label: 'draft orders' }, { truncated: tablesTruncated, limit: tablesLimit, label: 'tables' }, { truncated: waitersTruncated, limit: waitersLimit, label: 'waiters' }]} />
     <div className="pos-layout"><section className="menu-browser"><div className="menu-toolbar"><label className="search-field"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addHighlightedItem() } }} placeholder="Search menu items" /></label><div className="category-tabs"><button className={category === 'all' ? 'category-active' : ''} onClick={() => setCategory('all')}>All items</button>{categories.map((entry) => <button key={entry.id} className={category === entry.id ? 'category-active' : ''} onClick={() => setCategory(entry.id)}>{entry.name}</button>)}</div></div>
       {itemsLoading ? <LoadingLines count={6} /> : visibleItems.length ? <div className="menu-grid">{visibleItems.map((item) => <button className="menu-item" key={item.id} onClick={() => item.variants?.length || item.addOns?.length ? setOptionItem(item) : addToCart(item)} onMouseEnter={() => setSelectedMenuId(item.id)}><div className="menu-item-image"><MenuImage url={item.imageUrl} name={item.name} /><span className="add-item"><Plus size={17} /></span></div><div className="menu-item-copy"><strong>{item.name}</strong><span>{item.description || item.categoryName || 'Menu item'}</span><b>{money(item.priceCents)}</b></div></button>)}</div> : <EmptyState title="No available menu items" detail="Add items in Menu management or update your search." />}
     </section><aside className="cart-panel"><div className="cart-title"><div><p className="eyebrow">CURRENT ORDER</p><h2>{activeDraftId ? 'Saved draft' : 'New order'}</h2></div><span className="cart-count">{cart.reduce((sum, line) => sum + line.quantity, 0)} items</span></div><details className="cart-disclosure draft-disclosure" open={Boolean(activeDraftId)}><summary>Drafts &amp; save <span>{cart.length ? 'Auto-saved' : `${drafts.length} saved`}</span></summary><div className="draft-toolbar"><select aria-label="Saved drafts" value={selectedDraftId} onChange={(event) => setSelectedDraftId(event.target.value)}><option value="">Saved drafts ({drafts.length})</option>{drafts.map((draft) => <option key={draft.id} value={draft.id}>{draft.type} · {formatDate(draft.updatedAt)}</option>)}</select><button className="button button-small" onClick={resumeDraft} disabled={!selectedDraftId}>Resume</button><button className="button button-small" onClick={saveDraft} disabled={!cart.length}>Save draft</button></div></details>
       {canSeeCustomers && <label className="compact-label">Customer <select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">Walk-in customer</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>}
+      <label className="compact-label">Waiter <select value={waiterId} onChange={(event) => setWaiterId(event.target.value)}><option value="">No waiter</option>{waiters.filter((waiter) => waiter.status !== 'inactive').map((waiter) => <option key={waiter.id} value={waiter.id}>{waiter.name}</option>)}</select></label>
       <div className="cart-lines">{cart.length ? cart.map((line) => <div className="cart-line" key={line.lineId}><div className="cart-line-details"><strong>{line.name}</strong><span>{line.optionLabel ? `${line.optionLabel} · ` : ''}{money(line.unitPriceCents)} each</span><details className="cart-line-note" open={Boolean(line.note)}><summary>{line.note ? 'Edit item note' : 'Add item note'}</summary><input className="cart-item-note" aria-label={`Note for ${line.name}`} placeholder="Special request" maxLength={300} value={line.note} onChange={(event) => updateLineNote(line.lineId, event.target.value)} /></details></div><div className="quantity-control"><button aria-label={`Remove one ${line.name}`} onClick={() => changeQty(line.lineId, -1)}><Minus size={14} /></button><span>{line.quantity}</span><button aria-label={`Add one ${line.name}`} onClick={() => changeQty(line.lineId, 1)}><Plus size={14} /></button></div><strong>{money(line.unitPriceCents * line.quantity)}</strong></div>) : <div className="cart-empty">Choose a menu item to get started.</div>}</div>
       <details className="cart-disclosure order-extras" open={Boolean(note || discount)}><summary>Order details <span>{note || discount ? 'Added' : 'Optional'}</span></summary><div className="order-extras-fields"><label className="compact-label order-note-label">Order note <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Allergies, guest requests…" maxLength={500} /></label>
       {canDiscount && <label className="compact-label discount-field">Discount amount<input aria-label="Discount amount" type="number" min="0" step="0.01" max={(subtotalCents / 100).toFixed(2)} value={discount} onChange={(event) => setDiscount(event.target.value)} placeholder="0.00" /></label>}</div></details>
@@ -458,7 +471,7 @@ function OrdersPage() {
     <PageHeading eyebrow="SERVICE FLOOR" title="Orders" description="Track order progress and record payments." action={<div className="order-toolbar"><label className="search-field"><Search size={16} /><input aria-label="Search orders" placeholder="Search orders" value={search} onChange={(event) => setSearch(event.target.value)} /></label><div className="filter-menu-wrap" ref={filterMenuRef}><button type="button" className={`filter-trigger ${filterMenuOpen ? 'open' : ''}`} aria-label="Filter orders" aria-expanded={filterMenuOpen} onClick={() => setFilterMenuOpen((open) => !open)}><span>{visibleFilterLabel}</span></button>{filterMenuOpen && <div className="filter-popover" role="listbox" aria-label="Order filters">{filterOptions.map((option) => <button key={option.value} type="button" className={`filter-option ${filter === option.value ? 'selected' : ''}`} onClick={() => { setFilter(option.value); setFilterMenuOpen(false) }}>{option.label}</button>)}</div>}</div></div>} />
     <LimitNotices sources={[{ truncated: ordersTruncated, limit: ordersLimit, label: 'orders' }, { truncated: financialsTruncated, limit: financialsLimit, label: 'financial records' }]} />
     {error && <div className="inline-alert">{error}</div>}
-    <section className="panel records-panel">{loading ? <LoadingLines /> : visible.length ? <div className="table-scroll"><table><thead><tr><th>Order</th><th>Placed</th><th>Type / table</th><th>Items</th>{canSeeFinancials && <><th>Payment</th><th>Total</th></>}<th>Next action</th></tr></thead><tbody>{visible.map((order) => <tr key={order.id}><td><strong>{order.orderNumber || `#${order.id.slice(0, 7)}`}</strong></td><td>{formatDate(order.createdAt)}</td><td>{order.type || 'dine-in'}{order.tableName ? ` · ${order.tableName}` : ''}</td><td>{order.items?.reduce((sum, item) => sum + item.quantity, 0) || 0} items</td>{canSeeFinancials && <><td><button className={`payment-status ${order.paymentStatus === 'paid' ? 'paid' : ''}`} onClick={() => setPaymentOrder(order)}>{order.paymentStatus || 'unpaid'}{order.paymentStatus !== 'paid' && <CirclePlus size={14} />}</button></td><td>{money(order.totalCents)}</td></>}<td><div className="row-actions">{order.status && !['served', 'cancelled'].includes(order.status) && <><button className="button button-small" onClick={() => openOrderAction(order)} disabled={busyId === order.id}>{busyId === order.id ? 'Updating' : nextAction(order.status)}</button>{canVoidOrders && <button className="button button-small button-danger" onClick={() => cancelOrder(order)} disabled={busyId === order.id}>Cancel</button>}{canTransferTable && order.type === 'dine-in' && <button className="button button-small" onClick={() => setTransferTarget(order)}>Transfer table</button>}</>}{canSeeFinancials && <button className="icon-button" title="Print receipt" aria-label="Print receipt" onClick={() => setReceipt(order)}><Printer size={16} /></button>}</div></td></tr>)}</tbody></table></div> : <EmptyState title="No orders in this view" detail="New POS orders will appear here as soon as they are sent." />}</section>
+    <section className="panel records-panel">{loading ? <LoadingLines /> : visible.length ? <div className="table-scroll"><table><thead><tr><th>Order</th><th>Placed</th><th>Type / table</th><th>Waiter</th><th>Items</th>{canSeeFinancials && <><th>Payment</th><th>Total</th></>}<th>Next action</th></tr></thead><tbody>{visible.map((order) => <tr key={order.id}><td><strong>{order.orderNumber || `#${order.id.slice(0, 7)}`}</strong></td><td>{formatDate(order.createdAt)}</td><td>{order.type || 'dine-in'}{order.tableName ? ` · ${order.tableName}` : ''}</td><td>{order.waiterName || '—'}</td><td>{order.items?.reduce((sum, item) => sum + item.quantity, 0) || 0} items</td>{canSeeFinancials && <><td><button className={`payment-status ${order.paymentStatus === 'paid' ? 'paid' : ''}`} onClick={() => setPaymentOrder(order)}>{order.paymentStatus || 'unpaid'}{order.paymentStatus !== 'paid' && <CirclePlus size={14} />}</button></td><td>{money(order.totalCents)}</td></>}<td><div className="row-actions">{order.status && !['served', 'cancelled'].includes(order.status) && <><button className="button button-small" onClick={() => openOrderAction(order)} disabled={busyId === order.id}>{busyId === order.id ? 'Updating' : nextAction(order.status)}</button>{canVoidOrders && <button className="button button-small button-danger" onClick={() => cancelOrder(order)} disabled={busyId === order.id}>Cancel</button>}{canTransferTable && order.type === 'dine-in' && <button className="button button-small" onClick={() => setTransferTarget(order)}>Transfer table</button>}</>}{canSeeFinancials && <button className="icon-button" title="Print receipt" aria-label="Print receipt" onClick={() => setReceipt(order)}><Printer size={16} /></button>}</div></td></tr>)}</tbody></table></div> : <EmptyState title="No orders in this view" detail="New POS orders will appear here as soon as they are sent." />}</section>
     {detailsOrder && <OrderDetailsDialog order={detailsOrder} canSeeFinancials={canSeeFinancials} onClose={() => setDetailsOrder(null)} />}
     {paymentOrder && <PaymentDialog order={paymentOrder} onClose={() => setPaymentOrder(null)} />}
     {receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} onClose={() => setReceipt(null)} />}
@@ -486,6 +499,7 @@ function OrderDetailsDialog({ order, canSeeFinancials, onClose }) {
           <div><span>Status</span><strong className={`status-pill status-${status}`}>{status}</strong></div>
           <div><span>Placed</span><strong>{formatDate(order.createdAt)}</strong></div>
           <div><span>Type</span><strong>{(order.type || 'dine-in').replaceAll('-', ' ')}{order.tableName ? ` · ${order.tableName}` : ''}</strong></div>
+          {order.waiterName && <div><span>Waiter</span><strong>{order.waiterName}</strong></div>}
         </div>
         {order.note && <p className="order-details-note"><strong>Order note</strong>{order.note}</p>}
         <div className="order-details-list">
@@ -611,6 +625,7 @@ export function OperationsPage() {
 }
 
 const pageConfig = {
+  '/waiters': { title: 'Waiters', eyebrow: 'SERVICE TEAM', description: 'Add waiter names and contact details for POS orders.', collection: 'waiters', fields: [{ name: 'name', label: 'Waiter name', required: true }, { name: 'phone', label: 'Phone (optional)', type: 'tel' }, { name: 'status', label: 'Status', type: 'select', options: [{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }] }] },
   '/tables': { title: 'Tables', eyebrow: 'DINING ROOM', description: 'Keep seating and service capacity up to date.', collection: 'tables', fields: [{ name: 'name', label: 'Table name or number', required: true }, { name: 'capacity', label: 'Seating capacity', type: 'number', required: true, min: 1 }] },
   '/expenses': { title: 'Expenses', eyebrow: 'COST CONTROL', description: 'Record day-to-day costs with a clear paper trail.', collection: 'expenses', fields: [{ name: 'category', label: 'Category', required: true }, { name: 'amount', label: 'Amount', type: 'number', required: true, min: 0.01, step: '0.01' }, { name: 'date', label: 'Date', type: 'date', required: true }, { name: 'method', label: 'Payment method', type: 'select', options: ['cash', 'card', 'transfer'] }, { name: 'description', label: 'Description' }], readonly: true },
   '/customers': { title: 'Customers', eyebrow: 'GUEST RELATIONSHIPS', description: 'Keep only the guest details your team needs.', collection: 'customers', fields: [{ name: 'name', label: 'Customer name', required: true }, { name: 'phone', label: 'Phone (optional)', type: 'tel' }, { name: 'email', label: 'Email (optional)', type: 'email' }] },
@@ -618,6 +633,7 @@ const pageConfig = {
 }
 
 function ResourcePage({ path }) {
+  if (path === '/waiters') return <WaitersPage />
   if (path === '/tables') return <TablesPage />
   if (path === '/customers') return <CustomerPage />
   if (path === '/menu') return <MenuManagement />
@@ -630,6 +646,41 @@ function ResourcePage({ path }) {
   const config = pageConfig[path]
   if (config) return <RecordWorkspace config={config} />
   return <div className="inline-alert">This workspace is not available for your role.</div>
+}
+
+function WaitersPage() {
+  const { membership, user } = useAuth()
+  const { records, loading, error, truncated, limit } = useRecords('waiters')
+  const [editing, setEditing] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const fields = pageConfig['/waiters'].fields
+
+  if (!['owner', 'manager'].includes(membership?.role)) return <div className="inline-alert">Waiter management is available to owners and managers.</div>
+
+  async function save(values) {
+    setBusy(true)
+    try {
+      const name = String(values.name || '').trim()
+      const phone = String(values.phone || '').trim()
+      if (!name || name.length > 120) throw new Error('Enter a waiter name up to 120 characters long.')
+      if (phone.length > 40) throw new Error('Phone numbers can be up to 40 characters long.')
+      const waiter = { ...values, name, phone, status: values.status || 'active' }
+      if (!editing?.id) waiter.createdBy = user.uid
+      await saveRecord(membership.restaurantId, 'waiters', waiter, editing?.id)
+      toast.success(editing?.id ? 'Waiter details saved.' : 'Waiter added.')
+      setEditing(null)
+    } catch (problem) { toast.error(friendlyError(problem)) } finally { setBusy(false) }
+  }
+
+  async function remove(waiter) {
+    if (!window.confirm(`Delete waiter ${waiter.name}?`)) return
+    try {
+      await removeRecord(membership.restaurantId, 'waiters', waiter.id)
+      toast.success('Waiter deleted.')
+    } catch (problem) { toast.error(friendlyError(problem)) }
+  }
+
+  return <><PageHeading eyebrow="SERVICE TEAM" title="Add Waiters" description="Keep waiter names and phone numbers ready to assign to POS orders." action={<button className="button button-primary" onClick={() => setEditing({ status: 'active' })}><Plus size={16} /> Add waiter</button>} /><LimitNotices sources={[{ truncated, limit, label: 'waiters' }]} />{error && <div className="inline-alert">{error}</div>}<section className="panel records-panel">{loading ? <LoadingLines /> : records.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Phone</th><th>Status</th><th /></tr></thead><tbody>{records.map((waiter) => <tr key={waiter.id}><td><strong>{waiter.name}</strong></td><td>{waiter.phone || '—'}</td><td><span className={`status-pill ${waiter.status === 'inactive' ? 'status-cancelled' : 'status-served'}`}>{waiter.status || 'active'}</span></td><td><div className="row-actions"><button className="button button-small" onClick={() => setEditing(waiter)}>Edit</button><button className="button button-small button-danger" onClick={() => remove(waiter)}>Delete</button></div></td></tr>)}</tbody></table></div> : <EmptyState title="No waiters yet" detail="Add a waiter here to make their name available on POS orders." />}</section>{editing && <FormDialog title={editing.id ? 'Edit waiter' : 'Add waiter'} fields={fields} initial={editing} onClose={() => setEditing(null)} onSubmit={save} busy={busy} />}</>
 }
 
 function TablesPage() {

@@ -87,6 +87,9 @@ function buildReceipt({ order, financial, payments = [], settings = {}, printer 
   if (order.tableName) {
     b.row('Table:', order.tableName)
   }
+  if (order.waiterName) {
+    b.row('Waiter:', order.waiterName)
+  }
   if (order.customerName) {
     b.row('Customer:', order.customerName.slice(0, 20))
   }

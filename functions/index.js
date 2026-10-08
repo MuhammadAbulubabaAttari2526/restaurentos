@@ -115,6 +115,8 @@ export const createOrder = onCall(options, (request) => withActor(request, async
   }
   const settingRef = subcollection(actor.restaurantId, 'settings').doc('profile')
   const tableRef = tableId ? subcollection(actor.restaurantId, 'tables').doc(tableId) : null
+  const waiterId = data.waiterId ? safeId(data.waiterId, 'Waiter') : null
+  const waiterRef = waiterId ? subcollection(actor.restaurantId, 'waiters').doc(waiterId) : null
   const activeTableReservations = tableRef
     ? subcollection(actor.restaurantId, 'reservations')
       .where('tableId', '==', tableId)
@@ -132,6 +134,7 @@ export const createOrder = onCall(options, (request) => withActor(request, async
     const refs = [counterRef, settingRef]
     if (tableRef) refs.push(tableRef)
     if (customerRef) refs.push(customerRef)
+    if (waiterRef) refs.push(waiterRef)
     refs.push(...menuRefs)
     const snapshots = await transaction.getAll(...refs)
     const activeReservationSnapshots = activeTableReservations ? await transaction.get(activeTableReservations) : null
@@ -140,11 +143,13 @@ export const createOrder = onCall(options, (request) => withActor(request, async
     const actualSettings = snapshots[offset++]
     const actualTable = tableRef ? snapshots[offset++] : null
     const actualCustomer = customerRef ? snapshots[offset++] : null
+    const actualWaiter = waiterRef ? snapshots[offset++] : null
     const loadedMenus = snapshots.slice(offset)
 
     if (!actualSettings.exists) fail('failed-precondition', 'Restaurant settings have not been configured.')
     if (tableRef && (!actualTable?.exists || actualTable.get('status') !== 'available' || !activeReservationSnapshots.empty)) fail('failed-precondition', 'That table is occupied or reserved right now. Choose another table.')
     if (customerRef && !actualCustomer?.exists) fail('not-found', 'That customer record could not be found.')
+    if (waiterRef && (!actualWaiter?.exists || actualWaiter.get('status') === 'inactive')) fail('failed-precondition', 'Choose an active waiter or clear the waiter selection.')
     const settings = actualSettings.data()
     const menuById = new Map()
     for (let index = 0; index < menuRefs.length; index += 1) {
@@ -193,6 +198,8 @@ export const createOrder = onCall(options, (request) => withActor(request, async
       type,
       tableId,
       tableName,
+      waiterId,
+      waiterName: actualWaiter?.get('name') || '',
       note: typeof data.note === 'string' ? data.note.trim().slice(0, 500) : '',
       items: serviceLines,
       status: 'queued',

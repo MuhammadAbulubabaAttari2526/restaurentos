@@ -79,10 +79,18 @@ RestaurantOS includes an enterprise-grade Windows Desktop POS build running offl
 - **Backup Retention:** The backup manager enforces an automatic retention policy (keeping the latest 14 backups) to protect disk space.
 
 ### 3. Auto-Updater (electron-updater)
-- Configured with GitHub Releases provider.
-- Silent background downloads that never interrupt active cashier transactions.
-- Silent fail-over: if offline, the update check skips gracefully without error popups.
-- Creates a safety database backup before applying updates.
+- The GitHub Releases provider is configured in `package.json`; `package.json` is the version source used by Electron, the installer, and the app footer.
+- Packaged apps check 10 seconds after startup and every four hours. Checks fail quietly when offline.
+- A small banner offers **Update Now** or **Later**. The download starts only when requested, shows progress, and never installs automatically.
+- Restart/install is explicit. It is blocked while a POS or print operation is active or an order/payment remains open. The app first attempts Firebase sync, checks SQLite integrity, and makes a database backup; any unsynced queue stays safely in SQLite and syncs after restart.
+- Migrations run at startup in transactions, with a pre-migration backup before each schema change. Test SQL files are excluded from production migrations.
+
+### 4. Building and Diagnosing the Windows App
+- Before a production build, provide the required Firebase web-app values from `.env.example` in the build environment or an ignored `.env.local`. Vite embeds `VITE_*` values into the renderer during the build; the installed app does not read `.env` files. Production builds stop if required Firebase values are missing or the emulator flag is enabled.
+  - Run `npm run dist:win` to create the standard x64 NSIS installer, or `npm run dist:win:unpacked` to create an unpacked x64 app for a clean-machine startup check.
+  - The packager reuses the Electron runtime installed in `node_modules/electron/dist`, avoiding a second extraction step. `better-sqlite3` 13 uses a Node-API prebuild, so it does not depend on Electron's version-specific Node ABI. The `postinstall` and Windows package scripts verify that the Windows x64 prebuild exists and loads. The native `.node` file is unpacked from `app.asar`; migration SQL remains inside the app bundle.
+  - Startup diagnostics are written to `%APPDATA%\RestaurantOS\logs\main.log`. Press **Ctrl+Shift+I** to open DevTools, or set `RESTAURANTOS_OPEN_DEVTOOLS=1` before launch.
+  - For an isolated startup check, pass `--user-data-dir=<empty-folder>` to `RestaurantOS.exe`. The SQLite database and logs use that directory through Electron's `userData` path.
 
 
 Set `VITE_USE_FIREBASE_EMULATORS=true` in `.env.local`, provide syntactically valid Firebase web configuration, and run `npm run dev` in another terminal.
@@ -95,3 +103,24 @@ npx firebase-tools deploy --only firestore:rules,firestore:indexes,hosting --pro
 ```
 
 The live project is `restaurentos-846`; its Hosting URL is <https://restaurentos-846.web.app>.
+
+## Windows Desktop Releases and Update Checks
+
+The desktop updater reads public GitHub Releases from the `owner` and `repo` in `package.json`. Keep those values pointed at the repository clients can access. Published releases must include the installer and electron-builder metadata (`latest.yml` and its referenced assets); `npm run release:win` uploads them automatically.
+
+To publish an update:
+
+1. Commit the app changes and push them to the release branch.
+2. Bump the version with `npm version patch` (or `minor` / `major`). This updates `package.json`, `package-lock.json`, and creates a matching `vX.Y.Z` Git tag. The app reads its version from `package.json`.
+3. Push the commit and tag, for example `git push origin main --follow-tags`.
+4. Set `GH_TOKEN` in your terminal to a GitHub token with permission to publish Releases in the configured repository. Do not put the token in source files.
+5. Run `npm run release:win`. It builds the renderer, verifies the SQLite native dependency, creates the x64 NSIS installer, and publishes the installer and update metadata to that version's GitHub Release.
+6. Remove the token from the terminal when publishing is finished. Installed apps check for the release after startup and then every four hours; they show the banner and wait for the user to choose when to download and restart.
+
+To verify the update banner, use a test GitHub Releases repository if you do not want to notify production clients:
+
+1. Point the test build's GitHub `owner` and `repo` in `package.json` at the test repository, set its version to `1.0.0`, then run `npm run release:win` and install that release on a test PC.
+2. Bump the package version to `1.0.1` and publish it to the same test repository with `npm run release:win`.
+3. Start the installed `1.0.0` app while online. Within about 10 seconds it should show **New update available (v1.0.1)**. Choose **Later** to dismiss it, or **Update Now** to see download progress.
+4. After download, choose **Restart to install**. The app refuses while orders, payments, printing, or unsafe database state remain. After restart, check that the sidebar shows v1.0.1 and that the existing SQLite data is still present.
+5. Restore the production GitHub `owner` and `repo` before building a client release. An offline check should leave POS available and retry on a later startup or scheduled check.

@@ -8,6 +8,7 @@ const { ipcMain } = require('electron')
 const {
   getUpdateStatus,
   checkForUpdatesSilently,
+  downloadUpdateNow,
   installUpdateNow,
 } = require('../../updater/autoUpdater.cjs')
 
@@ -20,6 +21,14 @@ function registerUpdaterIpc() {
     try {
       await checkForUpdatesSilently()
       return { success: true, data: getUpdateStatus() }
+    } catch (err) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('updater:download', async () => {
+    try {
+      return await downloadUpdateNow()
     } catch (err) {
       return { success: false, error: err.message }
     }

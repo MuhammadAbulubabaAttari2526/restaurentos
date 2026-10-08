@@ -11,9 +11,10 @@
     "appId": "com.restaurantos.pos",
     "productName": "RestaurantOS",
     "npmRebuild": false,
+    "electronDist": "node_modules/electron/dist",
     "asar": true,
     "asarUnpack": [
-      "**/node_modules/better-sqlite3/**/*"
+      "**/node_modules/better-sqlite3/prebuilds/win32-x64.node"
     ],
     "directories": {
       "output": "dist-electron"
@@ -27,7 +28,6 @@
       "reports/**/*",
       "backup/**/*",
       "updater/**/*",
-      "node_modules/better-sqlite3/**/*",
       "package.json"
     ],
     "publish": [
@@ -63,8 +63,11 @@
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "electron:preview": "npm run build && electron .",
-    "dist:win": "npm run build && electron-builder --win nsis",
-    "postinstall": "electron-builder install-app-deps",
+    "dist:win": "npm run build && npm run verify:sqlite && electron-builder --win nsis --x64",
+    "dist:win:unpacked": "npm run build && npm run verify:sqlite && electron-builder --win --x64 --dir",
+    "release:win": "npm run build && npm run verify:sqlite && electron-builder --win nsis --x64 --publish always",
+    "postinstall": "node scripts/verify-sqlite-native.cjs",
+    "verify:sqlite": "node scripts/verify-sqlite-native.cjs",
     "test": "vitest run",
     "test:electron": "electron test-electron-headless.cjs",
     "test:watch": "vitest",

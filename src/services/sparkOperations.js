@@ -90,10 +90,12 @@ async function createOrder(data) {
   const tableRef = tableId ? path(actor.restaurantId, 'tables', tableId) : null
   const customerId = data.customerId ? safeId(data.customerId, 'Customer') : null
   const customerRef = customerId ? path(actor.restaurantId, 'customers', customerId) : null
+  const waiterId = data.waiterId ? safeId(data.waiterId, 'Waiter') : null
+  const waiterRef = waiterId ? path(actor.restaurantId, 'waiters', waiterId) : null
   const menuRefs = itemIds.map((id) => path(actor.restaurantId, 'menuItems', id))
 
   return runTransaction(db, async (transaction) => {
-    const refs = [orderRef, counterRef, settingRef, ...(tableRef ? [tableRef] : []), ...(customerRef ? [customerRef] : []), ...menuRefs]
+    const refs = [orderRef, counterRef, settingRef, ...(tableRef ? [tableRef] : []), ...(customerRef ? [customerRef] : []), ...(waiterRef ? [waiterRef] : []), ...menuRefs]
     const snapshots = await Promise.all(refs.map((ref) => transaction.get(ref)))
     const existing = snapshots[0]
     if (existing.exists()) return { orderId: requestId, orderNumber: existing.data().orderNumber, duplicate: true }
@@ -102,6 +104,7 @@ async function createOrder(data) {
     const settingsSnapshot = snapshots[offset++]
     const tableSnapshot = tableRef ? snapshots[offset++] : null
     const customerSnapshot = customerRef ? snapshots[offset++] : null
+    const waiterSnapshot = waiterRef ? snapshots[offset++] : null
     const menuSnapshots = snapshots.slice(offset)
     const seatedReservationId = tableSnapshot?.data()?.currentReservationId
     const seatedReservation = seatedReservationId
@@ -117,6 +120,7 @@ async function createOrder(data) {
     if (tableRef && (!tableSnapshot.exists() || (!tableAvailable && !tableLinkedToSeatedReservation))) fail('That table is occupied or unavailable.')
     if (tableRef && covers > Number(tableSnapshot.data().capacity || 0)) fail('Guest count exceeds this table’s seating capacity.')
     if (customerRef && !customerSnapshot.exists()) fail('That customer record could not be found.')
+    if (waiterRef && (!waiterSnapshot.exists() || waiterSnapshot.data().status === 'inactive')) fail('Choose an active waiter or clear the waiter selection.')
 
     const menuById = new Map(menuRefs.map((ref, index) => [itemIds[index], menuSnapshots[index].data()]))
     if (menuSnapshots.some((snapshot) => !snapshot.exists() || snapshot.data().available === false)) fail('One or more items are no longer available.')
@@ -156,6 +160,8 @@ async function createOrder(data) {
       type,
       tableId,
       tableName,
+      waiterId,
+      waiterName: waiterSnapshot?.data()?.name || '',
       ...(type === 'dine-in' ? { covers } : {}),
       note,
       items: lines.map(({ itemId, name, quantity, note: itemNote, selectedVariant, selectedAddOns }) => ({
