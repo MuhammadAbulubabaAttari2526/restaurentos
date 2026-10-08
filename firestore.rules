@@ -82,6 +82,19 @@ service cloud.firestore {
         && (!data.keys().hasAny(['recipe']) || (data.recipe is list && data.recipe.size() <= 30));
     }
 
+    function validWaiter(data, restaurantId, waiterId) {
+      return data.keys().hasOnly(['id', 'restaurantId', 'name', 'phone', 'status', 'createdBy', 'createdAt', 'updatedAt', 'deletedAt'])
+        && data.keys().hasAll(['name', 'phone', 'status', 'createdAt'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 120
+        && data.phone is string && data.phone.size() <= 40
+        && data.status in ['active', 'inactive']
+        && (data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40))
+        && (!data.keys().hasAny(['updatedAt']) || data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40))
+        && (!data.keys().hasAny(['deletedAt']) || data.deletedAt == null || data.deletedAt is timestamp || (data.deletedAt is string && data.deletedAt.size() <= 40))
+        && (!data.keys().hasAny(['id']) || data.id == waiterId)
+        && (!data.keys().hasAny(['restaurantId']) || data.restaurantId == restaurantId);
+    }
+
     function validSettings(data) {
       return data.keys().hasAll(['name', 'currency', 'taxRate', 'paymentMethods'])
         && data.name is string && data.name.size() > 0 && data.name.size() <= 120
@@ -103,7 +116,10 @@ service cloud.firestore {
       let tablePath = /databases/$(database)/documents/restaurants/$(restaurantId)/tables/$(safeTableId);
       let reservationId = exists(tablePath) ? get(tablePath).data.get('currentReservationId', '') : '';
       let reservationPath = /databases/$(database)/documents/restaurants/$(restaurantId)/reservations/$(reservationId);
-      return data.keys().hasOnly(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'covers', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt'])
+      let waiterId = data.get('waiterId', null);
+      let safeWaiterId = waiterId is string ? waiterId : '__invalid__';
+      let waiterPath = /databases/$(database)/documents/restaurants/$(restaurantId)/waiters/$(safeWaiterId);
+      return data.keys().hasOnly(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'covers', 'waiterId', 'waiterName', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt'])
         && data.keys().hasAll(['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt'])
         && data.restaurantId == restaurantId
         && data.orderNumber is string
@@ -115,6 +131,12 @@ service cloud.firestore {
         && data.paymentStatus == 'unpaid'
         && data.createdBy == request.auth.uid
         && data.note is string && data.note.size() <= 500
+        && (!data.keys().hasAny(['waiterName']) || (data.waiterName is string && data.waiterName.size() <= 120))
+        && (!data.keys().hasAny(['waiterId']) || data.waiterId == null
+          || (data.waiterId is string && data.waiterId.size() > 0
+            && exists(waiterPath) && get(waiterPath).data.status == 'active'
+            && data.get('waiterName', '') == get(waiterPath).data.name))
+        && (!data.keys().hasAny(['waiterName']) || data.get('waiterName', '') == '' || (waiterId is string && data.get('waiterId', null) != null))
         && data.createdAt == request.time && data.updatedAt == request.time
         && existsAfter(financePath)
         && getAfter(financePath).data.restaurantId == restaurantId
@@ -444,6 +466,17 @@ service cloud.firestore {
         allow read: if orderStaff(restaurantId);
         allow create: if manager(restaurantId) && validMenuItem(request.resource.data);
         allow update: if manager(restaurantId) && validMenuItem(request.resource.data);
+        allow delete: if manager(restaurantId);
+      }
+
+      match /waiters/{waiterId} {
+        allow read: if orderStaff(restaurantId);
+        allow create: if manager(restaurantId)
+          && validWaiter(request.resource.data, restaurantId, waiterId)
+          && (!request.resource.data.keys().hasAny(['createdBy']) || request.resource.data.createdBy == request.auth.uid);
+        allow update: if manager(restaurantId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone', 'status', 'updatedAt'])
+          && validWaiter(request.resource.data, restaurantId, waiterId);
         allow delete: if manager(restaurantId);
       }
 
