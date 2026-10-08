@@ -175,7 +175,11 @@ function getBaseUrl(projectId) {
 }
 
 function getDocumentName(projectId, restaurantId, collection, docId) {
-  return `${getBaseUrl(projectId)}/restaurants/${restaurantId}/${collection}/${docId}`
+  return `projects/${projectId}/databases/(default)/documents/restaurants/${restaurantId}/${collection}/${docId}`
+}
+
+function getDocumentUrl(projectId, restaurantId, collection, docId) {
+  return `https://firestore.googleapis.com/v1/${getDocumentName(projectId, restaurantId, collection, docId)}`
 }
 
 async function readDoc({ projectId, authToken, restaurantId, collection, docId }) {
@@ -184,7 +188,7 @@ async function readDoc({ projectId, authToken, restaurantId, collection, docId }
 
   try {
     const result = await httpRequest({
-      url: getDocumentName(projectId, restaurantId, collection, docId),
+      url: getDocumentUrl(projectId, restaurantId, collection, docId),
       method: 'GET',
       headers,
     })

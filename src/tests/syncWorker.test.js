@@ -191,4 +191,20 @@ describe('SyncWorker queue reliability', () => {
 
     expect(mocks.db.prepare('SELECT status FROM sync_queue').get().status).toBe('pending')
   })
+
+  it('requeues the known malformed Firestore document-name rejection', () => {
+    makeQueueItem({
+      status: 'failed',
+      retryCount: 1,
+      lastError: 'REJECTED 400: Document name "https://firestore.googleapis.com/v1/projects/p/databases/(default)/documents/restaurants/r/orders/o" lacks "projects" at index 0.',
+    })
+
+    worker.recoverStuckQueue()
+
+    expect(mocks.db.prepare('SELECT status, retry_count, last_error FROM sync_queue').get()).toEqual({
+      status: 'pending',
+      retry_count: 0,
+      last_error: null,
+    })
+  })
 })

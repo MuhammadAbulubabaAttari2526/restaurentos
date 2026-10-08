@@ -187,7 +187,17 @@ class SyncWorker extends EventEmitter {
 
   recoverStuckQueue() {
     const now = new Date().toISOString()
-    this.getDatabase().prepare("UPDATE sync_queue SET status = 'pending', updated_at = ? WHERE status = 'syncing'").run(now)
+    const db = this.getDatabase()
+    db.transaction(() => {
+      db.prepare("UPDATE sync_queue SET status = 'pending', updated_at = ? WHERE status = 'syncing'").run(now)
+      db.prepare(`UPDATE sync_queue
+        SET status = 'pending', retry_count = 0, last_error = NULL, updated_at = ?
+        WHERE status = 'failed'
+          AND last_error LIKE ?`).run(
+        now,
+        'REJECTED 400: Document name "https://firestore.googleapis.com/%lacks "projects" at index 0.%'
+      )
+    })()
     this._didRecoverQueue = true
   }
 
