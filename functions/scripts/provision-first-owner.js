@@ -3,9 +3,9 @@ import { closeMongoConnection, FieldValue, getFirestoreCompat, getMongoDatabase 
 import { getMongoAuth } from '../mongoAuth.js'
 import { loadLocalMongoConfig } from './load-local-mongo-config.js'
 
-const [restaurantId, restaurantName, ownerEmail] = process.argv.slice(2)
+const [restaurantId, restaurantName, ownerEmail, directPassword] = process.argv.slice(2)
 if (!restaurantId || !restaurantName || !ownerEmail) {
-  console.error('Usage: npm run provision-owner -- <restaurantId> <restaurantName> <ownerEmail>')
+  console.error('Usage: npm run provision-owner -- <restaurantId> <restaurantName> <ownerEmail> [password]')
   process.exit(1)
 }
 if (!/^[A-Za-z0-9_-]{1,80}$/.test(restaurantId)) throw new Error('Restaurant ID may contain letters, numbers, underscores, and hyphens only.')
@@ -39,7 +39,7 @@ function readPassword() {
 }
 
 loadLocalMongoConfig()
-const password = await readPassword()
+const password = directPassword || process.env.OWNER_PASSWORD || await readPassword()
 if (password.length < 8) throw new Error('Use a password with at least 8 characters.')
 
 const normalizedEmail = ownerEmail.trim().toLowerCase()

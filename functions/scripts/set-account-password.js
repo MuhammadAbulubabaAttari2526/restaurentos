@@ -3,10 +3,10 @@ import { closeMongoConnection, getMongoDatabase, getFirestoreCompat } from '../m
 import { getMongoAuth } from '../mongoAuth.js'
 import { loadLocalMongoConfig } from './load-local-mongo-config.js'
 
-const [emailArgument] = process.argv.slice(2)
+const [emailArgument, directPassword] = process.argv.slice(2)
 const email = String(emailArgument || '').trim().toLowerCase()
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-  console.error('Usage: npm run set-password -- <accountEmail>')
+  console.error('Usage: npm run set-password -- <accountEmail> [password]')
   process.exit(1)
 }
 
@@ -39,7 +39,7 @@ function readPassword() {
 }
 
 loadLocalMongoConfig()
-const password = await readPassword()
+const password = directPassword || process.env.ACCOUNT_PASSWORD || await readPassword()
 if (password.length < 8) throw new Error('Use a password with at least 8 characters.')
 
 const database = await getMongoDatabase()
