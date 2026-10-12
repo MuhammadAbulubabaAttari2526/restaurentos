@@ -2,8 +2,8 @@
  * syncWorker.cjs
  *
  * Background sync worker for RestaurantOS.
- * - Pushes queued changes (sync_queue) to Firestore REST API.
- * - Pulls incremental updates from Firestore into local SQLite.
+ * - Pushes queued changes (sync_queue) to the authenticated MongoDB API.
+ * - Pulls incremental updates from MongoDB into local SQLite.
  * - Handles exponential backoff and retries.
  * - Dispatches sync status changes to the Electron renderer.
  */
@@ -12,7 +12,7 @@ const EventEmitter = require('events')
 const { getDb } = require('../database/sqliteClient.cjs')
 const { getEntry } = require('../database/repositories/collectionRegistry.cjs')
 const genericRepository = require('../database/repositories/genericRepository.cjs')
-const firestoreRest = require('./firestoreRest.cjs')
+const mongoRest = require('./mongoRest.cjs')
 const { networkMonitor } = require('./networkMonitor.cjs')
 
 const SYNCABLE_PULL_COLLECTIONS = [
@@ -23,7 +23,7 @@ const SYNCABLE_PULL_COLLECTIONS = [
 const BACKOFF_MS = [15000, 30000, 60000, 300000, 900000]
 const ATTENTION_ERROR = /^REJECTED \d{3}:/
 const LOCAL_ONLY_FIELDS = new Set(['id', 'uuid', 'syncStatus', 'version', 'deleted', 'updated_at'])
-const FIRESTORE_FIELDS = {
+const MONGO_SYNC_FIELDS = {
   settings: ['name', 'currency', 'taxRate', 'paymentMethods', 'updatedAt'],
   orders: ['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'covers', 'waiterId', 'waiterName', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt'],
   orderFinancials: ['restaurantId', 'orderId', 'customerId', 'items', 'subtotalCents', 'discountCents', 'taxCents', 'totalCents', 'paidCents', 'refundedCents', 'customerVisitCounted', 'status', 'paymentStatus', 'createdAt', 'updatedAt', 'lastPaymentId'],
@@ -33,8 +33,8 @@ const FIRESTORE_FIELDS = {
   draftOrders: ['restaurantId', 'createdBy', 'status', 'type', 'tableId', 'customerId', 'note', 'items', 'discountCents', 'createdAt', 'updatedAt'],
 }
 
-function toFirestoreData(collection, payload, action) {
-  const allowedFields = FIRESTORE_FIELDS[collection]
+function toMongoData(collection, payload, action) {
+  const allowedFields = MONGO_SYNC_FIELDS[collection]
   const data = {}
   for (const [key, value] of Object.entries(payload)) {
     if (LOCAL_ONLY_FIELDS.has(key) || key === 'updatedAt') continue
@@ -46,7 +46,7 @@ function toFirestoreData(collection, payload, action) {
   }
   if (action === 'delete') {
     if (allowedFields && !allowedFields.includes('deletedAt')) {
-      const error = new Error(`The Firestore rules for ${collection} do not allow soft-delete fields.`)
+      const error = new Error(`The MongoDB API does not allow soft-delete fields for ${collection}.`)
       error.status = 400
       throw error
     }
@@ -69,9 +69,9 @@ class SyncWorker extends EventEmitter {
     super()
     this.getDatabase = dependencies.getDb || getDb
     this.repository = dependencies.repository || genericRepository
-    this.firestore = dependencies.firestoreRest || firestoreRest
+    this.mongo = dependencies.mongoRest || dependencies.firestoreRest || mongoRest
     this.network = dependencies.networkMonitor || networkMonitor
-    this.projectId = process.env.VITE_FIREBASE_PROJECT_ID || ''
+    this.apiBaseUrl = process.env.RESTAURANTOS_API_URL || 'http://localhost:8787'
     this.authToken = null
     this.tokenExpiresAt = null
     this.restaurantId = null
@@ -101,8 +101,8 @@ class SyncWorker extends EventEmitter {
     })
   }
 
-  setCredentials({ projectId, authToken, restaurantId, expiresAt }) {
-    if (projectId) this.projectId = projectId
+  setCredentials({ apiBaseUrl, authToken, restaurantId, expiresAt }) {
+    if (apiBaseUrl) this.apiBaseUrl = apiBaseUrl.replace(/\/+$/, '')
     if (authToken !== undefined) this.authToken = authToken
     if (expiresAt !== undefined) this.tokenExpiresAt = expiresAt ? Date.parse(expiresAt) : null
     if (restaurantId) this.restaurantId = restaurantId
@@ -180,7 +180,7 @@ class SyncWorker extends EventEmitter {
       lastSyncTime: this.lastSyncTime || this.getLastSyncTime(),
       lastError: this.lastError,
       restaurantId: this.restaurantId,
-      hasCredentials: Boolean(this.projectId && this.restaurantId),
+      hasCredentials: Boolean(this.apiBaseUrl && this.restaurantId),
       authExpiresAt: this.tokenExpiresAt,
     }
   }
@@ -193,9 +193,10 @@ class SyncWorker extends EventEmitter {
       db.prepare(`UPDATE sync_queue
         SET status = 'pending', retry_count = 0, last_error = NULL, updated_at = ?
         WHERE status = 'failed'
-          AND last_error LIKE ?`).run(
+          AND (last_error LIKE ? OR last_error = ?)`).run(
         now,
-        'REJECTED 400: Document name "https://firestore.googleapis.com/%lacks "projects" at index 0.%'
+        'REJECTED 400: Document name "https://firestore.googleapis.com/%lacks "projects" at index 0.%',
+        'REJECTED 400: Cannot insert then insert an entity in the same request.'
       )
     })()
     this._didRecoverQueue = true
@@ -211,7 +212,7 @@ class SyncWorker extends EventEmitter {
 
   async processQueue(batchSize = 500) {
     if (!this.network.isOnline()) return 0
-    if (!this.projectId || !this.authToken) return 0
+    if (!this.apiBaseUrl || !this.authToken) return 0
     if (this.tokenExpiresAt && Date.now() >= this.tokenExpiresAt) {
       this.authRequired = true
       this.notifyStatus()
@@ -221,17 +222,28 @@ class SyncWorker extends EventEmitter {
     const db = this.getDatabase()
     batchSize = Math.min(Math.max(1, Number(batchSize) || 500), 500)
     const queued = this.restaurantId
-      ? db.prepare("SELECT * FROM sync_queue WHERE restaurant_id = ? AND status IN ('pending','failed') ORDER BY created_at ASC LIMIT ?").all(this.restaurantId, batchSize)
-      : db.prepare("SELECT * FROM sync_queue WHERE status IN ('pending','failed') ORDER BY created_at ASC LIMIT ?").all(batchSize)
+      ? db.prepare("SELECT * FROM sync_queue WHERE restaurant_id = ? AND status IN ('pending','failed') ORDER BY created_at ASC, rowid ASC LIMIT ?").all(this.restaurantId, batchSize)
+      : db.prepare("SELECT * FROM sync_queue WHERE status IN ('pending','failed') ORDER BY created_at ASC, rowid ASC LIMIT ?").all(batchSize)
     const now = Date.now()
-    const items = queued.filter((item) => {
+    const eligible = queued.filter((item) => {
       if (ATTENTION_ERROR.test(item.last_error || '')) return false
       if (!item.last_error) return true
       const delay = BACKOFF_MS[Math.min(item.retry_count || 0, BACKOFF_MS.length - 1)]
       const updatedAt = Date.parse(item.updated_at || item.created_at)
       return !Number.isFinite(updatedAt) || now - updatedAt >= delay
     })
-    if (!items.length) return 0
+    if (!eligible.length) return 0
+
+    const groupedItems = new Map()
+    for (const item of eligible) {
+      const key = `${item.restaurant_id}\u0000${item.collection_name}\u0000${item.record_id}`
+      const group = groupedItems.get(key) || []
+      group.push(item)
+      groupedItems.set(key, group)
+    }
+    const groups = [...groupedItems.values()]
+    const items = groups.flat()
+    const latestItems = groups.map((group) => group[group.length - 1])
 
     const timestamp = new Date().toISOString()
     const markSyncing = db.prepare("UPDATE sync_queue SET status = 'syncing', updated_at = ? WHERE id = ?")
@@ -240,10 +252,10 @@ class SyncWorker extends EventEmitter {
 
     try {
       const writes = []
-      for (const item of items) {
+      for (const item of latestItems) {
         const payload = JSON.parse(item.payload_json || '{}')
-        const remote = await this.firestore.readDoc({
-          projectId: this.projectId,
+        const remote = await this.mongo.readDoc({
+          apiBaseUrl: this.apiBaseUrl,
           authToken: this.authToken,
           restaurantId: item.restaurant_id,
           collection: item.collection_name,
@@ -255,9 +267,9 @@ class SyncWorker extends EventEmitter {
           continue
         }
 
-        const data = toFirestoreData(item.collection_name, payload, item.action)
-        writes.push(this.firestore.buildUpdateWrite({
-          projectId: this.projectId,
+        const data = toMongoData(item.collection_name, payload, item.action)
+        writes.push(this.mongo.buildUpdateWrite({
+          apiBaseUrl: this.apiBaseUrl,
           restaurantId: item.restaurant_id,
           collection: item.collection_name,
           docId: payload.uuid || item.record_id,
@@ -268,8 +280,8 @@ class SyncWorker extends EventEmitter {
       }
 
       if (writes.length) {
-        await this.firestore.commitWrites({
-          projectId: this.projectId,
+        await this.mongo.commitWrites({
+          apiBaseUrl: this.apiBaseUrl,
           authToken: this.authToken,
           writes,
         })
@@ -287,7 +299,7 @@ class SyncWorker extends EventEmitter {
       }
       db.transaction(() => {
         for (const item of items) markSynced.run(completedAt, item.id)
-        for (const item of items) markRecordSynced(item)
+        for (const item of latestItems) markRecordSynced(item)
       })()
       this.lastError = null
       return items.length
@@ -312,15 +324,15 @@ class SyncWorker extends EventEmitter {
 
   async pullIncremental() {
     if (!this.network.isOnline()) return
-    if (!this.projectId || !this.restaurantId) return
+    if (!this.apiBaseUrl || !this.restaurantId) return
 
     for (const col of SYNCABLE_PULL_COLLECTIONS) {
       const db = this.getDatabase()
       const lastPullAt = db.prepare('SELECT last_sync_at FROM sync_meta WHERE collection_name = ?').get(col)?.last_sync_at || null
 
       try {
-        const remoteItems = await this.firestore.queryUpdatedSince({
-          projectId: this.projectId,
+        const remoteItems = await this.mongo.queryUpdatedSince({
+          apiBaseUrl: this.apiBaseUrl,
           authToken: this.authToken,
           restaurantId: this.restaurantId,
           collection: col,

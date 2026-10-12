@@ -1,7 +1,7 @@
 /**
  * networkMonitor.cjs
  *
- * Monitors network reachability to Firestore/Internet.
+ * Monitors network reachability to the RestaurantOS MongoDB API host.
  * Uses HTTPS HEAD request with short timeout.
  * Emits 'status' event on state change and allows manual mock overrides for tests/demo.
  */
@@ -14,7 +14,7 @@ class NetworkMonitor extends EventEmitter {
   constructor(options = {}) {
     super()
     this.checkIntervalMs = options.checkIntervalMs || 15000
-    this.pingUrl = options.pingUrl || 'https://firestore.googleapis.com'
+    this.pingUrl = options.pingUrl || process.env.RESTAURANTOS_API_URL || 'http://localhost:8787/api/health'
     this.timeoutMs = options.timeoutMs || 4000
     this._isOnline = true
     this._mockStatus = null // null means use real check, boolean forces state

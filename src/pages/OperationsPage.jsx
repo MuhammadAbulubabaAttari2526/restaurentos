@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  ArrowDownLeft, ArrowUpRight, Banknote, CalendarDays, CirclePlus, Clock3,
-  Minus, Plus, Printer, Search, Settings, ShoppingBag, Trash2, Utensils, Users,
+  ArrowDownLeft, ArrowUpRight, Banknote, CalendarDays, Check, CirclePlus,
+  Clock3, CreditCard, Minus, Plus, Printer, Search, Settings, ShoppingBag,
+  Trash2, Truck, Utensils, Users, Wallet, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../context/useAuth.js'
@@ -16,11 +17,9 @@ import {
 } from '../services/data.js'
 import { calculateTotals, formatMoney, friendlyError, normalizeCurrency } from '../utils/domain.js'
 import { getPosDraftKey, readPosDraft, writePosDraft } from '../utils/posDraftStorage.js'
-import { normalizeMenuImageUrl } from '../utils/menuImage.js'
+import { normalizeMenuImageUrl, optimizeMenuImageUrl } from '../utils/menuImage.js'
 import { createStableIntentId, resetStableIntentId } from '../utils/idUtils.js'
 import { mergeOrderWithFinancials } from '../utils/orderMerge.js'
-import { sendPasswordResetEmail } from 'firebase/auth'
-import { auth } from '../lib/firebase.js'
 import './operations.css'
 
 const currency = normalizeCurrency(import.meta.env.VITE_CURRENCY || 'PKR')
@@ -60,14 +59,14 @@ function LoadingLines({ count = 4 }) {
 }
 
 function MenuImage({ url, name }) {
-  const source = normalizeMenuImageUrl(url)
+  const source = optimizeMenuImageUrl(url)
   const [failedSource, setFailedSource] = useState('')
   if (!source || failedSource === source) return <span className="menu-image-fallback" aria-hidden="true">{name?.trim()?.slice(0, 1) || 'M'}</span>
   return <img src={source} alt="" loading="lazy" decoding="async" onError={() => setFailedSource(source)} />
 }
 
 function MenuImagePreview({ url }) {
-  const source = normalizeMenuImageUrl(url)
+  const source = optimizeMenuImageUrl(url)
   const [failedSource, setFailedSource] = useState('')
   if (!String(url || '').trim()) return <small className="menu-image-hint">Paste a public HTTPS image link to preview it.</small>
   if (!source) return <small className="menu-image-hint image-link-error">Enter a valid HTTPS image URL.</small>
@@ -77,6 +76,16 @@ function MenuImagePreview({ url }) {
 
 function EmptyState({ title, detail }) {
   return <div className="empty-state"><div className="empty-icon"><ShoppingBag size={20} /></div><strong>{title}</strong><span>{detail}</span></div>
+}
+
+function ContactLink({ value, kind }) {
+  const text = String(value || '').trim()
+  if (!text) return '—'
+  const href = kind === 'email'
+    ? `mailto:${encodeURIComponent(text)}`
+    : `tel:${text.replace(/[^\d+]/g, '')}`
+  if (kind !== 'email' && href === 'tel:') return text
+  return <a className="contact-link" href={href}>{text}</a>
 }
 
 function StatTile({ label, value, note, icon: Icon, change }) {
@@ -143,6 +152,7 @@ function Dashboard() {
 function PosPage() {
   const { membership, user } = useAuth()
   const location = useLocation()
+  const navigate = useNavigate()
   const draftStorageKey = getPosDraftKey(membership, user)
   const { records: items, loading: itemsLoading, truncated: itemsTruncated, limit: itemsLimit } = useRecords('menuItems')
   const { records: categories, truncated: categoriesTruncated, limit: categoriesLimit } = useRecords('categories')
@@ -152,8 +162,10 @@ function PosPage() {
   const { records: waiters, loading: waitersLoading, truncated: waitersTruncated, limit: waitersLimit } = useRecords('waiters', 150)
   const [draftHydrated, setDraftHydrated] = useState(false)
   const [cart, setCart] = useState([])
+  const [ticketOpen, setTicketOpen] = useState(false)
   const [category, setCategory] = useState('all')
   const [search, setSearch] = useState('')
+  const searchRef = useRef(null)
   const [selectedMenuId, setSelectedMenuId] = useState('')
   const [orderType, setOrderType] = useState(() => (location.state?.tableId ? 'dine-in' : 'direct-bill'))
   const [tableId, setTableId] = useState(() => location.state?.tableId || '')
@@ -162,6 +174,11 @@ function PosPage() {
   const [waiterId, setWaiterId] = useState('')
   const [note, setNote] = useState('')
   const [discount, setDiscount] = useState('')
+  const [collectPayment, setCollectPayment] = useState(false)
+  const [paymentMethod, setPaymentMethod] = useState('cash')
+  const [paymentAmount, setPaymentAmount] = useState('')
+  const [paymentReference, setPaymentReference] = useState('')
+  const [pendingPaymentOrder, setPendingPaymentOrder] = useState(null)
   const [optionItem, setOptionItem] = useState(null)
   const [receipt, setReceipt] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -172,12 +189,17 @@ function PosPage() {
   const [selectedDraftId, setSelectedDraftId] = useState('')
   const [activeDraftId, setActiveDraftId] = useState(null)
   const orderIntentIdRef = useRef(null)
+  const paymentIntentIdRef = useRef(null)
+  const previousTotalCentsRef = useRef(0)
 
   useEffect(() => {
     if (!draftStorageKey || draftHydrated) return
     const savedDraft = readPosDraft(draftStorageKey)
     if (savedDraft) {
       setCart(savedDraft.cart || [])
+      setPendingPaymentOrder(savedDraft.pendingPaymentOrder || null)
+      orderIntentIdRef.current = savedDraft.pendingPaymentOrder?.orderId || savedDraft.orderIntentId || null
+      paymentIntentIdRef.current = savedDraft.paymentIntentId || null
       setOrderType(savedDraft.orderType || (location.state?.tableId ? 'dine-in' : 'direct-bill'))
       setTableId(savedDraft.tableId || location.state?.tableId || '')
       setCovers(Number(savedDraft.covers) || 1)
@@ -198,13 +220,35 @@ function PosPage() {
   const subtotalCents = cart.reduce((sum, line) => sum + line.unitPriceCents * line.quantity, 0)
   const discountCents = Math.min(Math.round(Number(discount || 0) * 100) || 0, subtotalCents)
   const totals = calculateTotals(cart, taxRate, discountCents)
+  const canCollectPayment = ['owner', 'manager', 'cashier'].includes(membership?.role)
+  const paymentMethods = useMemo(() => {
+    const configured = restaurant[0]?.paymentMethods
+    const enabled = Array.isArray(configured) ? configured : ['cash', 'card', 'digital']
+    return ['cash', 'card', 'digital'].filter((method) => enabled.includes(method))
+  }, [restaurant])
+  const selectedPaymentMethod = paymentMethods.includes(paymentMethod) ? paymentMethod : paymentMethods[0] || 'cash'
+  const collectPaymentNow = canCollectPayment && paymentMethods.length > 0 && collectPayment
   const visibleItems = useMemo(() => items.filter((item) => item.available !== false && (category === 'all' || item.categoryId === category) && item.name?.toLowerCase().includes(search.toLowerCase())), [items, category, search])
   const highlightedItem = visibleItems.find((entry) => entry.id === selectedMenuId) || visibleItems[0]
 
   useEffect(() => {
-    if (!draftStorageKey) return
-    writePosDraft(draftStorageKey, { cart, orderType, tableId, covers, customerId, waiterId, note, discount, activeDraftId })
-  }, [draftStorageKey, cart, orderType, tableId, covers, customerId, waiterId, note, discount, activeDraftId])
+    const previousTotal = previousTotalCentsRef.current
+    setPaymentAmount((current) => {
+      const followsOrderTotal = !current || Math.round(Number(current) * 100) === previousTotal
+      return followsOrderTotal ? (totals.totalCents ? (totals.totalCents / 100).toFixed(2) : '') : current
+    })
+    previousTotalCentsRef.current = totals.totalCents
+  }, [totals.totalCents])
+
+  const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0)
+  const enteredPaymentCents = Math.round(Number(paymentAmount) * 100)
+  const changeDueCents = selectedPaymentMethod === 'cash' ? Math.max(0, enteredPaymentCents - totals.totalCents) : 0
+  const visibleTables = tables.filter((table) => (table.status === 'available' || table.id === tableId) && (table.id === tableId || Number(table.capacity || 0) >= Number(covers || 1)))
+
+  useEffect(() => {
+    if (!draftStorageKey || !draftHydrated) return
+    writePosDraft(draftStorageKey, { cart, orderType, tableId, covers, customerId, waiterId, note, discount, activeDraftId, pendingPaymentOrder, orderIntentId: orderIntentIdRef.current, paymentIntentId: paymentIntentIdRef.current })
+  }, [draftStorageKey, draftHydrated, cart, orderType, tableId, covers, customerId, waiterId, note, discount, activeDraftId, pendingPaymentOrder])
 
   function addHighlightedItem() {
     const item = highlightedItem
@@ -218,6 +262,8 @@ function PosPage() {
   }
 
   function changeQty(lineId, amount) {
+    const currentLine = cart.find((line) => line.lineId === lineId)
+    if (amount < 0 && cart.length === 1 && currentLine?.quantity <= Math.abs(amount)) setTicketOpen(false)
     setCart((current) => {
       return current.map((line) => line.lineId === lineId ? { ...line, quantity: line.quantity + amount } : line).filter((line) => line.quantity > 0)
     })
@@ -225,6 +271,68 @@ function PosPage() {
 
   function updateLineNote(lineId, value) {
     setCart((current) => current.map((line) => line.lineId === lineId ? { ...line, note: value.slice(0, 300) } : line))
+  }
+
+  function handlePosKeyDown(event) {
+    if (optionItem || receipt) return
+    if (event.key === 'Escape' && ticketOpen) {
+      setTicketOpen(false)
+      return
+    }
+    if (event.key === 'F2') {
+      event.preventDefault()
+      searchRef.current?.focus()
+      return
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault()
+      submitOrder()
+      return
+    }
+    if (event.key === 'Escape' && document.activeElement === searchRef.current) setSearch('')
+  }
+
+  function startNewOrder() {
+    if (pendingPaymentOrder) return toast.error('Record payment for the saved order before starting another ticket.')
+    if (cart.length && !window.confirm('Clear this ticket and start a new order?')) return
+    resetStableIntentId(activeDraftId || 'pos-order')
+    if (orderIntentIdRef.current) resetStableIntentId(`pos-payment-${orderIntentIdRef.current}`)
+    orderIntentIdRef.current = null
+    paymentIntentIdRef.current = null
+    setCart([])
+    setTicketOpen(false)
+    setOrderType('direct-bill')
+    setTableId('')
+    setCovers(1)
+    setCustomerId('')
+    setWaiterId('')
+    setNote('')
+    setDiscount('')
+    setPaymentAmount('')
+    setPaymentReference('')
+    setPendingPaymentOrder(null)
+    setActiveDraftId(null)
+    setSelectedDraftId('')
+  }
+
+  function openOrdersForPendingPayment() {
+    if (!pendingPaymentOrder) return
+    if (activeDraftId) {
+      void runOperation('deleteOrderDraft', { draftId: activeDraftId }).catch((error) => {
+        toast.error(`Order is in Orders, but its saved draft could not be removed. ${friendlyError(error)}`)
+      })
+    }
+    resetStableIntentId(activeDraftId || 'pos-order')
+    if (pendingPaymentOrder.orderId) resetStableIntentId(`pos-payment-${pendingPaymentOrder.orderId}`)
+    orderIntentIdRef.current = null
+    paymentIntentIdRef.current = null
+    writePosDraft(draftStorageKey, { cart: [], orderType: 'direct-bill', tableId: '', covers: 1, customerId: '', waiterId: '', note: '', discount: '', activeDraftId: null, pendingPaymentOrder: null, orderIntentId: null, paymentIntentId: null })
+    setCart([])
+    setPendingPaymentOrder(null)
+    setActiveDraftId(null)
+    setSelectedDraftId('')
+    setTicketOpen(false)
+    navigate('/orders')
   }
 
   function addToCart(item, selectedVariantId = '', selectedAddOnIds = []) {
@@ -238,6 +346,7 @@ function PosPage() {
       if (found) return current.map((line) => line.lineId === lineId ? { ...line, quantity: line.quantity + 1 } : line)
       return [...current, { lineId, itemId: item.id, name: item.name, unitPriceCents, quantity: 1, note: '', selectedVariantId: selectedVariantId || null, selectedAddOnIds, optionLabel }]
     })
+    setTicketOpen(true)
   }
 
   async function saveDraft() {
@@ -278,6 +387,7 @@ function PosPage() {
       setOrderType(draft.type)
       setTableId(draft.tableId || '')
       setCustomerId(canSeeCustomers ? draft.customerId || '' : '')
+      setWaiterId(draft.waiterId || '')
       setNote(draft.note || '')
       setDiscount(((draft.discountCents || 0) / 100).toFixed(2))
       setActiveDraftId(draft.id)
@@ -287,67 +397,114 @@ function PosPage() {
 
   async function submitOrder() {
     if (submitting.current) return
+    if (pendingPaymentOrder) return openOrdersForPendingPayment()
     if (!cart.length) return toast.error('Add at least one menu item.')
     if (orderType === 'dine-in' && !tableId) return toast.error('Choose a table for this dine-in order.')
-    const requestId = orderIntentIdRef.current || createStableIntentId(activeDraftId || 'pos-order')
+    if (orderType === 'dine-in' && (!Number.isInteger(Number(covers)) || Number(covers) < 1 || Number(covers) > 40)) return toast.error('Guest count must be between 1 and 40.')
+    if (orderType === 'dine-in' && Number(covers) > Number(tables.find((table) => table.id === tableId)?.capacity || 0)) return toast.error('Guest count exceeds this table’s seating capacity.')
+    const enteredPaymentCents = Math.round(Number(paymentAmount) * 100)
+    if (collectPaymentNow && (!Number.isSafeInteger(enteredPaymentCents) || enteredPaymentCents <= 0)) return toast.error('Choose an enabled payment method and enter a valid amount received.')
+    if (collectPaymentNow && selectedPaymentMethod !== 'cash' && enteredPaymentCents > totals.totalCents) return toast.error('Payment amount cannot exceed the order total.')
+    const requestId = pendingPaymentOrder?.orderId || orderIntentIdRef.current || createStableIntentId(activeDraftId || 'pos-order')
     orderIntentIdRef.current = requestId
+    if (!pendingPaymentOrder) writePosDraft(draftStorageKey, { cart, orderType, tableId, covers, customerId, waiterId, note, discount, activeDraftId, pendingPaymentOrder: null, orderIntentId: requestId, paymentIntentId: paymentIntentIdRef.current })
     submitting.current = true
     setBusy(true)
+    let orderCreated = Boolean(pendingPaymentOrder)
     try {
-      const created = await createOrder({
+      const created = pendingPaymentOrder || await createOrder({
         requestId: requestId,
         type: orderType,
         tableId: orderType === 'dine-in' ? tableId || null : null,
         ...(orderType === 'dine-in' ? { covers: Number(covers) } : {}),
         customerId: canSeeCustomers ? customerId || null : null,
+        waiterId: waiterId || null,
         discountCents,
         note: note.trim().slice(0, 500),
         items: cart.map(({ itemId, quantity, note: itemNote, selectedVariantId, selectedAddOnIds }) => ({ itemId, quantity, note: itemNote, selectedVariantId, selectedAddOnIds })),
         createdBy: user.uid,
       })
+      orderCreated = true
+      const confirmedTotals = {
+        subtotalCents: created?.subtotalCents ?? totals.subtotalCents,
+        discountCents: created?.discountCents ?? totals.discountCents,
+        taxCents: created?.taxCents ?? totals.taxCents,
+        totalCents: created?.totalCents ?? totals.totalCents,
+      }
+      const orderId = created?.orderId || requestId
+      const tableName = pendingPaymentOrder?.tableName || tables.find((table) => table.id === tableId)?.name || ''
+      const waiterName = pendingPaymentOrder?.waiterName || waiters.find((waiter) => waiter.id === waiterId)?.name || ''
+      const receiptItems = pendingPaymentOrder?.items || cart.map((line) => {
+        const selectedItem = items.find((item) => item.id === line.itemId)
+        const addOnNames = (line.selectedAddOnIds || [])
+          .map((optionId) => selectedItem?.addOns?.find((option) => option.id === optionId)?.name)
+          .filter(Boolean)
+        return {
+          itemId: line.itemId,
+          name: line.name,
+          quantity: line.quantity,
+          unitPriceCents: line.unitPriceCents,
+          selectedVariant: line.selectedVariantId
+            ? { name: selectedItem?.variants?.find((variant) => variant.id === line.selectedVariantId)?.name || '' }
+            : null,
+          selectedAddOns: addOnNames.map((name) => ({ name })),
+        }
+      })
+      const savedOrder = pendingPaymentOrder || {
+        orderId,
+        orderNumber: created?.orderNumber || `DB-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`,
+        type: orderType,
+        tableName,
+        waiterId,
+        waiterName,
+        createdAt: new Date(),
+        ...confirmedTotals,
+        items: receiptItems,
+      }
+      let paidCents = 0
+      if (collectPaymentNow && enteredPaymentCents > 0) {
+        paidCents = Math.min(enteredPaymentCents, confirmedTotals.totalCents)
+        const paymentId = paymentIntentIdRef.current || createStableIntentId(`pos-payment-${orderId}`)
+        paymentIntentIdRef.current = paymentId
+        if (!pendingPaymentOrder) {
+          setPendingPaymentOrder(savedOrder)
+          writePosDraft(draftStorageKey, { cart, orderType, tableId, covers, customerId, waiterId, note, discount, activeDraftId, pendingPaymentOrder: savedOrder, orderIntentId: orderId, paymentIntentId: paymentId })
+        }
+        await recordPayment({
+          orderId,
+          paymentId,
+          amountCents: paidCents,
+          method: selectedPaymentMethod,
+          reference: paymentReference.trim().slice(0, 100),
+        })
+      }
       if (activeDraftId) {
         const savedDraftId = activeDraftId
         void runOperation('deleteOrderDraft', { draftId: savedDraftId }).catch((error) => {
           toast.error(`Order created, but the saved draft could not be removed. ${friendlyError(error)}`)
         })
       }
-      writePosDraft(draftStorageKey, { cart: [], orderType: 'direct-bill', tableId: '', covers: 1, customerId: '', waiterId: '', note: '', discount: '', activeDraftId: null })
-      toast.success('Order created.')
-      const tableName = tables.find((table) => table.id === tableId)?.name || ''
+      writePosDraft(draftStorageKey, { cart: [], orderType: 'direct-bill', tableId: '', covers: 1, customerId: '', waiterId: '', note: '', discount: '', activeDraftId: null, pendingPaymentOrder: null, orderIntentId: null, paymentIntentId: null })
+      toast.success(collectPaymentNow ? paidCents === confirmedTotals.totalCents ? 'Order paid in full.' : 'Order created with a partial payment.' : 'Order created successfully.')
       setReceipt({
-        id: created?.orderId || requestId,
-        orderNumber: created?.orderNumber || `DB-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`,
-        type: orderType,
-        tableName,
-        waiterId,
-        waiterName: waiters.find((waiter) => waiter.id === waiterId)?.name || '',
-        createdAt: new Date(),
-        subtotalCents: created?.subtotalCents ?? totals.subtotalCents,
-        discountCents: created?.discountCents ?? totals.discountCents,
-        taxCents: created?.taxCents ?? totals.taxCents,
-        totalCents: created?.totalCents ?? totals.totalCents,
-        paidCents: 0,
+        id: savedOrder.orderId,
+        orderNumber: savedOrder.orderNumber,
+        type: savedOrder.type,
+        tableName: savedOrder.tableName,
+        waiterId: savedOrder.waiterId,
+        waiterName: savedOrder.waiterName,
+        createdAt: savedOrder.createdAt,
+        ...confirmedTotals,
+        paidCents,
         refundedCents: 0,
-        items: cart.map((line) => {
-          const selectedItem = items.find((item) => item.id === line.itemId)
-          const addOnNames = (line.selectedAddOnIds || [])
-            .map((optionId) => selectedItem?.addOns?.find((option) => option.id === optionId)?.name)
-            .filter(Boolean)
-          return {
-            itemId: line.itemId,
-            name: line.name,
-            quantity: line.quantity,
-            unitPriceCents: line.unitPriceCents,
-            selectedVariant: line.selectedVariantId
-              ? { name: selectedItem?.variants?.find((variant) => variant.id === line.selectedVariantId)?.name || '' }
-              : null,
-            selectedAddOns: addOnNames.map((name) => ({ name })),
-          }
-        }),
+        items: savedOrder.items,
       })
       orderIntentIdRef.current = null
       resetStableIntentId(activeDraftId || 'pos-order')
+      paymentIntentIdRef.current = null
+      resetStableIntentId(`pos-payment-${orderId}`)
       setCart([])
+      setTicketOpen(false)
       setNote('')
       setDiscount('')
       setTableId('')
@@ -357,27 +514,73 @@ function PosPage() {
       setOrderType('direct-bill')
       setActiveDraftId(null)
       setSelectedDraftId('')
+      setPaymentAmount('')
+      setPaymentReference('')
+      setPendingPaymentOrder(null)
     } catch (error) {
-      toast.error(friendlyError(error))
+      toast.error(orderCreated ? `Order saved, but payment was not recorded. ${friendlyError(error)}` : friendlyError(error))
     } finally {
       submitting.current = false
       setBusy(false)
     }
   }
 
-  return <div className="pos-page"><PageHeading eyebrow="FRONT OF HOUSE" title="Point of sale" description="Build an order and send it straight to the service team." action={<span className="live-label"><i /> Menu availability is live</span>} /><LimitNotices sources={[{ truncated: itemsTruncated, limit: itemsLimit, label: 'menu items' }, { truncated: categoriesTruncated, limit: categoriesLimit, label: 'categories' }, { truncated: customersTruncated, limit: customersLimit, label: 'customers' }, { truncated: draftsTruncated, limit: draftsLimit, label: 'draft orders' }, { truncated: tablesTruncated, limit: tablesLimit, label: 'tables' }, { truncated: waitersTruncated, limit: waitersLimit, label: 'waiters' }]} />
-    <div className="pos-layout"><section className="menu-browser"><div className="menu-toolbar"><label className="search-field"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addHighlightedItem() } }} placeholder="Search menu items" /></label><div className="category-tabs"><button className={category === 'all' ? 'category-active' : ''} onClick={() => setCategory('all')}>All items</button>{categories.map((entry) => <button key={entry.id} className={category === entry.id ? 'category-active' : ''} onClick={() => setCategory(entry.id)}>{entry.name}</button>)}</div></div>
-      {itemsLoading ? <LoadingLines count={6} /> : visibleItems.length ? <div className="menu-grid">{visibleItems.map((item) => <button className="menu-item" key={item.id} onClick={() => item.variants?.length || item.addOns?.length ? setOptionItem(item) : addToCart(item)} onMouseEnter={() => setSelectedMenuId(item.id)}><div className="menu-item-image"><MenuImage url={item.imageUrl} name={item.name} /><span className="add-item"><Plus size={17} /></span></div><div className="menu-item-copy"><strong>{item.name}</strong><span>{item.description || item.categoryName || 'Menu item'}</span><b>{money(item.priceCents)}</b></div></button>)}</div> : <EmptyState title="No available menu items" detail="Add items in Menu management or update your search." />}
-    </section><aside className="cart-panel"><div className="cart-title"><div><p className="eyebrow">CURRENT ORDER</p><h2>{activeDraftId ? 'Saved draft' : 'New order'}</h2></div><span className="cart-count">{cart.reduce((sum, line) => sum + line.quantity, 0)} items</span></div><details className="cart-disclosure draft-disclosure" open={Boolean(activeDraftId)}><summary>Drafts &amp; save <span>{cart.length ? 'Auto-saved' : `${drafts.length} saved`}</span></summary><div className="draft-toolbar"><select aria-label="Saved drafts" value={selectedDraftId} onChange={(event) => setSelectedDraftId(event.target.value)}><option value="">Saved drafts ({drafts.length})</option>{drafts.map((draft) => <option key={draft.id} value={draft.id}>{draft.type} · {formatDate(draft.updatedAt)}</option>)}</select><button className="button button-small" onClick={resumeDraft} disabled={!selectedDraftId}>Resume</button><button className="button button-small" onClick={saveDraft} disabled={!cart.length}>Save draft</button></div></details>
-      {canSeeCustomers && <label className="compact-label">Customer <select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">Walk-in customer</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>}
-      <label className="compact-label">Waiter <select value={waiterId} onChange={(event) => setWaiterId(event.target.value)}><option value="">No waiter</option>{waiters.filter((waiter) => waiter.status !== 'inactive').map((waiter) => <option key={waiter.id} value={waiter.id}>{waiter.name}</option>)}</select></label>
-      <div className="cart-lines">{cart.length ? cart.map((line) => <div className="cart-line" key={line.lineId}><div className="cart-line-details"><strong>{line.name}</strong><span>{line.optionLabel ? `${line.optionLabel} · ` : ''}{money(line.unitPriceCents)} each</span><details className="cart-line-note" open={Boolean(line.note)}><summary>{line.note ? 'Edit item note' : 'Add item note'}</summary><input className="cart-item-note" aria-label={`Note for ${line.name}`} placeholder="Special request" maxLength={300} value={line.note} onChange={(event) => updateLineNote(line.lineId, event.target.value)} /></details></div><div className="quantity-control"><button aria-label={`Remove one ${line.name}`} onClick={() => changeQty(line.lineId, -1)}><Minus size={14} /></button><span>{line.quantity}</span><button aria-label={`Add one ${line.name}`} onClick={() => changeQty(line.lineId, 1)}><Plus size={14} /></button></div><strong>{money(line.unitPriceCents * line.quantity)}</strong></div>) : <div className="cart-empty">Choose a menu item to get started.</div>}</div>
-      <details className="cart-disclosure order-extras" open={Boolean(note || discount)}><summary>Order details <span>{note || discount ? 'Added' : 'Optional'}</span></summary><div className="order-extras-fields"><label className="compact-label order-note-label">Order note <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Allergies, guest requests…" maxLength={500} /></label>
-      {canDiscount && <label className="compact-label discount-field">Discount amount<input aria-label="Discount amount" type="number" min="0" step="0.01" max={(subtotalCents / 100).toFixed(2)} value={discount} onChange={(event) => setDiscount(event.target.value)} placeholder="0.00" /></label>}</div></details>
-      {orderType === 'dine-in' && <label className="compact-label">Guests<input aria-label="Guests" type="number" min="1" max="40" step="1" required value={covers} onChange={(event) => setCovers(event.target.value)} /></label>}
-      <div className="cart-totals"><div><span>Subtotal</span><span>{money(totals.subtotalCents)}</span></div>{totals.discountCents > 0 && <div><span>Discount</span><span>−{money(totals.discountCents)}</span></div>}<div><span>Tax</span><span>{money(totals.taxCents)}</span></div><div className="cart-grand-total"><strong>Total</strong><strong>{money(totals.totalCents)}</strong></div></div>
-      <button className="button button-primary send-order" onClick={submitOrder} disabled={busy || !cart.length}>{busy ? 'Saving order…' : 'Create order'}<ArrowUpRight size={17} /></button><p className="cart-security-note">Prices and tax are recalculated from the current menu before saving.</p>
-    </aside></div>{optionItem && <MenuOptionsDialog item={optionItem} onCancel={() => setOptionItem(null)} onAdd={(variantId, addOnIds) => { addToCart(optionItem, variantId, addOnIds); setOptionItem(null) }} />}{receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} onClose={() => setReceipt(null)} />}</div>
+  return <div className="pos-page pos-experience" onKeyDown={handlePosKeyDown}>
+    <header className="pos-hero">
+      <div><div className="pos-kicker"><span className="pos-live-dot" /> FRONT OF HOUSE <span className="pos-kicker-divider">/</span> POINT OF SALE</div><h1 aria-label="Point of sale">Make it a good one.</h1><p>Build a ticket and create the order in one place.</p></div>
+      <div className="pos-hero-meta"><span className="pos-live-pill"><span className="pos-live-dot" /> Menu synced</span><span className="pos-shortcut"><kbd>F2</kbd> Search <span>·</span> <kbd>Ctrl</kbd><kbd>↵</kbd> Place order</span></div>
+    </header>
+    <LimitNotices sources={[{ truncated: itemsTruncated, limit: itemsLimit, label: 'menu items' }, { truncated: categoriesTruncated, limit: categoriesLimit, label: 'categories' }, { truncated: customersTruncated, limit: customersLimit, label: 'customers' }, { truncated: draftsTruncated, limit: draftsLimit, label: 'draft orders' }, { truncated: tablesTruncated, limit: tablesLimit, label: 'tables' }, { truncated: waitersTruncated, limit: waitersLimit, label: 'waiters' }]} />
+
+    <div className={`pos-layout pos-workbench ${ticketOpen ? 'ticket-open' : ''}`}>
+      <section className="menu-browser pos-menu-browser" aria-label="Menu catalog">
+        <div className="pos-catalog-head"><div><p className="eyebrow">THE MENU</p><h2>Pick your items</h2><span>{visibleItems.length} available {visibleItems.length === 1 ? 'item' : 'items'}</span></div>
+          <label className="pos-search"><Search size={18} /><input ref={searchRef} aria-label="Search menu" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); addHighlightedItem() } }} placeholder="Search menu items…" />{search && <button type="button" aria-label="Clear search" onClick={() => setSearch('')}><X size={16} /></button>}<kbd>F2</kbd></label>
+        </div>
+        <div className="pos-category-row" role="tablist" aria-label="Menu categories"><button type="button" role="tab" aria-selected={category === 'all'} className={category === 'all' ? 'is-active' : ''} onClick={() => setCategory('all')}>Everything</button>{categories.map((entry) => <button type="button" role="tab" aria-selected={category === entry.id} key={entry.id} className={category === entry.id ? 'is-active' : ''} onClick={() => setCategory(entry.id)}>{entry.name}</button>)}</div>
+        {itemsLoading ? <div className="pos-product-grid"><LoadingLines count={6} /></div> : visibleItems.length ? <div className="pos-product-grid">{visibleItems.map((item) => {
+          const hasOptions = Boolean(item.variants?.length || item.addOns?.length)
+          return <button type="button" className="pos-product-card" key={item.id} onClick={() => hasOptions ? setOptionItem(item) : addToCart(item)} onMouseEnter={() => setSelectedMenuId(item.id)} aria-label={`Add ${item.name}, ${money(item.priceCents)}${hasOptions ? ', choose options' : ''}`} disabled={busy || Boolean(pendingPaymentOrder)}>
+            <span className="pos-product-photo"><MenuImage url={item.imageUrl} name={item.name} /><span className="pos-product-add"><Plus size={19} /></span>{hasOptions && <span className="pos-option-badge">Customize</span>}</span>
+            <span className="pos-product-info"><span className="pos-product-category">{item.categoryName || categories.find((entry) => entry.id === item.categoryId)?.name || 'Menu favorite'}</span><strong>{item.name}</strong><span className="pos-product-description">{item.description || (hasOptions ? 'Options available' : 'Made fresh to order')}</span><span className="pos-product-price">{money(item.priceCents)}<span> / item</span></span></span>
+          </button>
+        })}</div> : <div className="pos-empty-catalog"><div className="pos-empty-icon"><Search size={21} /></div><strong>{search ? 'No matching dishes' : 'Nothing on this menu yet'}</strong><span>{search ? 'Try another name or choose a different category.' : 'Add available items in Menu management to start taking orders.'}</span>{search && <button type="button" className="button button-subtle" onClick={() => setSearch('')}>Clear search</button>}</div>}
+        <div className="pos-catalog-foot"><span><i /> Prices update from your live menu</span><span>Tap any item to add it to the ticket</span></div>
+      </section>
+
+      <aside className={`cart-panel pos-ticket pos-ticket-drawer ${ticketOpen ? 'is-open' : ''}`} aria-label="Current order">
+        <button type="button" className="pos-ticket-close" onClick={() => setTicketOpen(false)} aria-label="Close order ticket"><X size={18} /></button>
+        <div className="pos-ticket-heading"><div className="pos-ticket-title"><span className="pos-ticket-icon"><ShoppingBag size={17} /></span><div><p className="eyebrow">YOUR TICKET</p><h2>{pendingPaymentOrder ? 'Payment due' : activeDraftId ? 'Saved order' : 'New order'}</h2></div></div><div className="pos-ticket-actions"><span className="pos-ticket-count">{itemCount} items</span><button type="button" className="pos-clear-button" onClick={startNewOrder} disabled={pendingPaymentOrder || (!cart.length && !activeDraftId)} aria-label="Start a new order" title="Start a new order"><Trash2 size={16} /></button></div></div>
+        {pendingPaymentOrder && <div className="pos-pending-alert" role="status"><strong>Order {pendingPaymentOrder.orderNumber || ''} is already with the kitchen.</strong><span>Payment is recorded from the Orders screen.</span><button type="button" className="button button-subtle" onClick={openOrdersForPendingPayment}>Open Orders</button></div>}
+
+        {(cart.length > 0 || orderType !== 'direct-bill') && <div className="pos-order-types" role="group" aria-label="Order type">{[
+          { value: 'dine-in', label: 'Dine in', icon: Utensils },
+          { value: 'takeaway', label: 'Takeaway', icon: ShoppingBag },
+          { value: 'delivery', label: 'Delivery', icon: Truck },
+          { value: 'direct-bill', label: 'Quick sale', icon: Wallet },
+        ].map(({ value, label, icon: Icon }) => <button type="button" key={value} className={orderType === value ? 'is-active' : ''} aria-pressed={orderType === value} disabled={Boolean(pendingPaymentOrder)} onClick={() => { setOrderType(value); if (value !== 'dine-in') { setTableId(''); setCovers(1) } }}><Icon size={16} /><span>{label}</span></button>)}</div>}
+
+        {orderType === 'dine-in' && <div className="pos-seating-fields"><label className="pos-field"><span>Table</span><select required value={tableId} onChange={(event) => setTableId(event.target.value)} disabled={Boolean(pendingPaymentOrder)}><option value="">{tables.length ? 'Choose an available table' : 'No tables set up'}</option>{visibleTables.map((table) => <option key={table.id} value={table.id}>{table.name} · {table.capacity || '—'} seats</option>)}</select></label><label className="pos-field pos-covers-field"><span>Guests</span><input aria-label="Number of guests" type="number" min="1" max="40" step="1" required value={covers} onChange={(event) => setCovers(event.target.value)} disabled={Boolean(pendingPaymentOrder)} /></label></div>}
+
+        <details className="cart-disclosure draft-disclosure pos-drafts" open={Boolean(activeDraftId)}><summary><span className="pos-drafts-title">Saved tickets</span><span>{drafts.length} saved</span></summary><div className="draft-toolbar"><select aria-label="Saved drafts" value={selectedDraftId} onChange={(event) => setSelectedDraftId(event.target.value)} disabled={Boolean(pendingPaymentOrder)}><option value="">Choose a saved ticket</option>{drafts.map((draft) => <option key={draft.id} value={draft.id}>{draft.type} · {formatDate(draft.updatedAt)}</option>)}</select><button type="button" className="button button-small" onClick={resumeDraft} disabled={Boolean(pendingPaymentOrder) || !selectedDraftId}>Resume</button><button type="button" className="button button-small" onClick={saveDraft} disabled={Boolean(pendingPaymentOrder) || !cart.length}>Save</button></div></details>
+
+        <div className={`pos-guest-fields ${canSeeCustomers ? '' : 'single-field'}`}>{canSeeCustomers && <label className="pos-field"><span>Customer</span><select value={customerId} onChange={(event) => setCustomerId(event.target.value)} disabled={Boolean(pendingPaymentOrder)}><option value="">Walk-in guest</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ''}</option>)}</select></label>}<label className="pos-field"><span>Served by</span><select value={waiterId} onChange={(event) => setWaiterId(event.target.value)} disabled={Boolean(pendingPaymentOrder)}><option value="">Assign waiter</option>{waiters.filter((waiter) => waiter.status !== 'inactive').map((waiter) => <option key={waiter.id} value={waiter.id}>{waiter.name}</option>)}</select></label></div>
+
+        <div className="pos-cart-list" aria-live="polite">{cart.length ? cart.map((line) => <article className="pos-cart-item" key={line.lineId}><div className="pos-cart-item-main"><div className="pos-cart-item-copy"><strong>{line.name}</strong>{line.optionLabel && <span>{line.optionLabel}</span>}<small>{money(line.unitPriceCents)} each</small></div><strong className="pos-line-total">{money(line.unitPriceCents * line.quantity)}</strong></div><div className="pos-cart-item-controls"><div className="pos-quantity-control"><button type="button" aria-label={`Remove one ${line.name}`} onClick={() => changeQty(line.lineId, -1)} disabled={Boolean(pendingPaymentOrder)}><Minus size={14} /></button><span>{line.quantity}</span><button type="button" aria-label={`Add one ${line.name}`} onClick={() => changeQty(line.lineId, 1)} disabled={Boolean(pendingPaymentOrder) || line.quantity >= 99}><Plus size={14} /></button></div><details className="cart-line-note" open={Boolean(line.note)}><summary>{line.note ? 'Edit note' : 'Add kitchen note'}</summary><input className="cart-item-note" aria-label={`Kitchen note for ${line.name}`} placeholder="e.g. no onions" maxLength={300} value={line.note} onChange={(event) => updateLineNote(line.lineId, event.target.value)} disabled={Boolean(pendingPaymentOrder)} /></details></div></article>) : <div className="pos-cart-empty"><span className="pos-cart-empty-icon"><ShoppingBag size={21} /></span><strong>Your ticket is waiting</strong><span>Choose a dish from the menu to begin.</span></div>}</div>
+
+        <details className="cart-disclosure order-extras pos-order-notes" open={Boolean(note || discount)}><summary><span>Notes &amp; adjustments</span><span>{note || discount ? 'Added' : 'Optional'}</span></summary><div className="order-extras-fields"><label className="pos-field pos-note-field"><span>Order note for kitchen</span><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Allergies or guest requests" maxLength={500} disabled={Boolean(pendingPaymentOrder)} /></label>{canDiscount && <label className="pos-field"><span>Discount amount</span><input aria-label="Discount amount" type="number" min="0" step="0.01" max={(subtotalCents / 100).toFixed(2)} value={discount} onChange={(event) => setDiscount(event.target.value)} placeholder="0.00" disabled={Boolean(pendingPaymentOrder)} /></label>}</div></details>
+
+        <div className="pos-payment-block"><div className="pos-payment-heading"><div><p className="eyebrow">PAYMENT</p><strong>{canCollectPayment ? 'How will they pay?' : 'Payment can be added later'}</strong></div><span className={`pos-payment-status ${collectPaymentNow ? 'is-active' : ''}`}>{pendingPaymentOrder && !canCollectPayment ? 'Access needed' : collectPaymentNow ? 'Pay now' : 'Pay later'}</span></div>{canCollectPayment && <><div className="pos-payment-mode" role="group" aria-label="Payment timing"><button type="button" aria-pressed={collectPaymentNow} className={collectPaymentNow ? 'is-active' : ''} disabled={!paymentMethods.length || Boolean(pendingPaymentOrder)} onClick={() => setCollectPayment(true)}><CreditCard size={15} /> Collect now</button><button type="button" aria-pressed={!collectPaymentNow} className={!collectPaymentNow ? 'is-active' : ''} disabled={Boolean(pendingPaymentOrder)} onClick={() => setCollectPayment(false)}>Add to orders</button></div>{collectPaymentNow && <><div className="pos-payment-methods" role="group" aria-label="Payment method">{paymentMethods.map((method) => <button type="button" key={method} className={selectedPaymentMethod === method ? 'is-active' : ''} aria-pressed={selectedPaymentMethod === method} onClick={() => setPaymentMethod(method)}>{method === 'cash' ? <Banknote size={15} /> : method === 'card' ? <CreditCard size={15} /> : <Wallet size={15} />}{method[0].toUpperCase() + method.slice(1)}</button>)}</div><label className="pos-field pos-payment-amount"><span>{selectedPaymentMethod === 'cash' ? 'Cash received' : 'Amount received'}</span><div className="pos-amount-input"><span>{restaurant[0]?.currency || currency}</span><input aria-label={selectedPaymentMethod === 'cash' ? 'Cash received' : 'Payment amount'} type="number" min="0.01" step="0.01" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} /></div></label>{selectedPaymentMethod !== 'cash' && <label className="pos-field pos-reference-field"><span>Payment reference <small>Optional</small></span><input value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} placeholder="Terminal or transfer reference" maxLength={100} /></label>}{changeDueCents > 0 && <div className="pos-payment-outcome"><span>Change due</span><strong className="has-change">{money(changeDueCents)}</strong></div>}</>}</>}{pendingPaymentOrder && !canCollectPayment && <p className="pos-payment-note">This order is saved. Ask an owner, manager, or cashier to record its payment.</p>}{!pendingPaymentOrder && !canCollectPayment && <p className="pos-payment-note">A cashier or manager can record payment from the Orders screen.</p>}</div>
+
+        <div className="pos-totals"><div><span>Subtotal</span><strong>{money(totals.subtotalCents)}</strong></div>{totals.discountCents > 0 && <div className="pos-discount-row"><span>Discount</span><strong>−{money(totals.discountCents)}</strong></div>}<div><span>Tax <small>{taxRate ? `${(taxRate * 100).toFixed(2).replace(/\.00$/, '')}%` : 'included'}</small></span><strong>{money(totals.taxCents)}</strong></div><div className="pos-total-row"><span>Total due</span><strong>{money(totals.totalCents)}</strong></div></div>
+        <button type="button" className="pos-checkout-button" onClick={submitOrder} disabled={busy || !cart.length || (orderType === 'dine-in' && !tableId) || (collectPaymentNow && (!Number.isSafeInteger(enteredPaymentCents) || enteredPaymentCents <= 0)) || (pendingPaymentOrder && (!canCollectPayment || !paymentMethods.length))}><span className="pos-checkout-icon">{collectPaymentNow ? <CreditCard size={18} /> : <Check size={19} />}</span><span>{busy ? 'Processing ticket…' : pendingPaymentOrder ? 'Open Orders for payment' : 'Create order'}<small>{busy ? 'Please wait' : `${itemCount} dishes · ${money(totals.totalCents)}`}</small></span><ArrowUpRight size={19} /></button>
+        <p className="pos-trust-note"><Check size={13} /> Menu prices and tax are verified before the order is saved.</p>
+      </aside>
+    </div>
+    {cart.length > 0 && !ticketOpen && <button type="button" className="pos-open-ticket" onClick={() => setTicketOpen(true)}><ShoppingBag size={18} /><span>View ticket</span><strong>{itemCount} {itemCount === 1 ? 'item' : 'items'} · {money(totals.totalCents)}</strong><ArrowUpRight size={17} /></button>}
+    {optionItem && <MenuOptionsDialog item={optionItem} onCancel={() => setOptionItem(null)} onAdd={(variantId, addOnIds) => { addToCart(optionItem, variantId, addOnIds); setOptionItem(null) }} />}
+    {receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} onClose={() => setReceipt(null)} />}
+  </div>
 }
 
 function MenuOptionsDialog({ item, onCancel, onAdd }) {
@@ -617,11 +820,21 @@ function nextAction(status) {
 
 export function OperationsPage() {
   const { pathname } = useLocation()
-  if (pathname === '/') return <Dashboard />
-  if (pathname === '/dashboard') return <Dashboard />
-  if (pathname === '/pos') return <PosPage />
-  if (pathname === '/orders') return <OrdersPage />
-  return <ResourcePage path={pathname} />
+  const normalizedPath = (pathname.replace(/\/+$/, '') || '/').toLowerCase()
+
+  if (normalizedPath === '/' || normalizedPath === '/dashboard') return <Dashboard />
+  if (normalizedPath === '/pos' || normalizedPath === '/pos-window' || normalizedPath.endsWith('/pos-window')) return <PosPage />
+  if (normalizedPath === '/orders') return <OrdersPage />
+  return <ResourcePage path={normalizedPath} />
+}
+
+export function NotFoundPage() {
+  return <section className="not-found-page" aria-labelledby="not-found-title">
+    <strong aria-hidden="true">404</strong>
+    <h1 id="not-found-title">This page isn’t here.</h1>
+    <p>That address does not match a RestaurantOS page. Return to your workspace to continue.</p>
+    <Link className="button button-primary" to="/">Return to your workspace</Link>
+  </section>
 }
 
 const pageConfig = {
@@ -645,7 +858,7 @@ function ResourcePage({ path }) {
   if (path === '/audit') return <AuditPage />
   const config = pageConfig[path]
   if (config) return <RecordWorkspace config={config} />
-  return <div className="inline-alert">This workspace is not available for your role.</div>
+  return <NotFoundPage />
 }
 
 function WaitersPage() {
@@ -680,7 +893,7 @@ function WaitersPage() {
     } catch (problem) { toast.error(friendlyError(problem)) }
   }
 
-  return <><PageHeading eyebrow="SERVICE TEAM" title="Add Waiters" description="Keep waiter names and phone numbers ready to assign to POS orders." action={<button className="button button-primary" onClick={() => setEditing({ status: 'active' })}><Plus size={16} /> Add waiter</button>} /><LimitNotices sources={[{ truncated, limit, label: 'waiters' }]} />{error && <div className="inline-alert">{error}</div>}<section className="panel records-panel">{loading ? <LoadingLines /> : records.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Phone</th><th>Status</th><th /></tr></thead><tbody>{records.map((waiter) => <tr key={waiter.id}><td><strong>{waiter.name}</strong></td><td>{waiter.phone || '—'}</td><td><span className={`status-pill ${waiter.status === 'inactive' ? 'status-cancelled' : 'status-served'}`}>{waiter.status || 'active'}</span></td><td><div className="row-actions"><button className="button button-small" onClick={() => setEditing(waiter)}>Edit</button><button className="button button-small button-danger" onClick={() => remove(waiter)}>Delete</button></div></td></tr>)}</tbody></table></div> : <EmptyState title="No waiters yet" detail="Add a waiter here to make their name available on POS orders." />}</section>{editing && <FormDialog title={editing.id ? 'Edit waiter' : 'Add waiter'} fields={fields} initial={editing} onClose={() => setEditing(null)} onSubmit={save} busy={busy} />}</>
+  return <><PageHeading eyebrow="SERVICE TEAM" title="Waiters" description="Keep waiter names and phone numbers ready to assign to POS orders." action={<button className="button button-primary" onClick={() => setEditing({ status: 'active' })}><Plus size={16} /> Add waiter</button>} /><LimitNotices sources={[{ truncated, limit, label: 'waiters' }]} />{error && <div className="inline-alert">{error}</div>}<section className="panel records-panel">{loading ? <LoadingLines /> : records.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Phone</th><th>Status</th><th /></tr></thead><tbody>{records.map((waiter) => <tr key={waiter.id}><td><strong>{waiter.name}</strong></td><td><ContactLink value={waiter.phone} kind="phone" /></td><td><span className={`status-pill ${waiter.status === 'inactive' ? 'status-cancelled' : 'status-served'}`}>{waiter.status || 'active'}</span></td><td><div className="row-actions"><button className="button button-small" onClick={() => setEditing(waiter)}>Edit</button><button className="button button-small button-danger" onClick={() => remove(waiter)}>Delete</button></div></td></tr>)}</tbody></table></div> : <EmptyState title="No waiters yet" detail="Add a waiter here to make their name available on POS orders." />}</section>{editing && <FormDialog title={editing.id ? 'Edit waiter' : 'Add waiter'} fields={fields} initial={editing} onClose={() => setEditing(null)} onSubmit={save} busy={busy} />}</>
 }
 
 function TablesPage() {
@@ -756,7 +969,7 @@ function TablesPage() {
   }
   return <><PageHeading eyebrow="DINING ROOM" title="Tables & reservations" description="See floor availability and manage upcoming guest bookings." action={<div className="table-page-actions">{canReserve && <button className="button button-subtle" onClick={() => setCreatingReservation(true)} disabled={!tables.some((table) => ['available', 'occupied'].includes(table.status))}><CalendarDays size={16} /> New reservation</button>}{canManageTables && <button className="button button-primary" onClick={() => setEditingTable({})}><Plus size={16} /> Add table</button>}</div>} /><LimitNotices sources={[{ truncated: tablesTruncated, limit: tablesLimit, label: 'tables' }, { truncated: reservationsTruncated, limit: reservationsLimit, label: 'reservations' }]} />
     {error && <div className="inline-alert">{error}</div>}<section className="floor-grid">{loading ? <div className="panel"><LoadingLines count={5} /></div> : tables.length ? tables.map((table) => <article className={`floor-table floor-${table.status || 'available'}`} key={table.id}><div className="floor-table-top"><span className="floor-table-icon"><Utensils size={18} /></span><span className={`status-pill status-${table.status === 'occupied' ? 'preparing' : table.status === 'merged' ? 'preparing' : 'served'}`}>{table.status || 'available'}</span></div><strong>{table.name}</strong><span>{table.capacity} seats</span>{table.mergedTableNames?.length > 0 && <small>Combined with {table.mergedTableNames.join(', ')}</small>}{table.mergedInto && <small>Part of {tables.find((candidate) => candidate.id === table.mergedInto)?.name || 'another table group'}</small>}{table.currentOrderId && <small>Order {table.currentOrderId.slice(0, 7)}</small>}{canManageTables && table.status === 'available' && table.mergedTableIds?.length > 0 && <button className="button button-small" onClick={() => unmerge(table)}>Unmerge tables</button>}{canManageTables && table.status === 'available' && !table.mergedInto && !table.mergedTableIds?.length && <button className="button button-small" onClick={() => setMergeTarget(table)}>Merge another table</button>}{canManageTables && !table.mergedInto && !table.mergedTableIds?.length && <button className="button button-small" onClick={() => setEditingTable(table)}>Edit table</button>}</article>) : <div className="panel floor-empty"><EmptyState title="No tables added" detail="Create your floor plan before opening dine-in orders." /></div>}</section>
-    <section className="panel records-panel reservation-panel"><div className="section-title reservation-title"><div><h2>Upcoming reservations</h2><p>Reserved tables are assigned again only when the guest is seated.</p></div><span className="count-badge">{reservations.filter((reservation) => reservation.status === 'booked' && !reservationHasEnded(reservation)).length}</span></div>{reservationsLoading ? <LoadingLines /> : reservations.length ? <div className="table-scroll"><table><thead><tr><th>Guest</th><th>Table</th><th>Guests</th><th>Starts</th><th>Duration</th><th>Status</th>{canReserve && <th />}</tr></thead><tbody>{reservations.map((reservation) => { const shownStatus = displayedReservationStatus(reservation); const pastBooking = shownStatus === 'no-show'; return <tr key={reservation.id}><td><strong>{reservation.guestName}</strong>{reservation.phone && <small className="table-secondary">{reservation.phone}</small>}</td><td>{reservation.tableName}</td><td>{reservation.covers}</td><td>{formatDate(reservation.startsAt)}</td><td>{Math.round(((reservation.endsAt?.toDate ? reservation.endsAt.toDate() : new Date(reservation.endsAt)) - (reservation.startsAt?.toDate ? reservation.startsAt.toDate() : new Date(reservation.startsAt))) / 60000) || '—'} min</td><td><span className={`status-pill ${pastBooking ? 'status-cancelled' : reservation.status === 'booked' ? 'status-queued' : reservation.status === 'seated' ? 'status-served' : 'status-cancelled'}`}>{shownStatus}</span></td>{canReserve && <td><div className="row-actions">{reservation.status === 'booked' && !pastBooking && <><button className="button button-small" onClick={() => seat(reservation)}>Seat</button><button className="button button-small button-danger" onClick={() => cancel(reservation)}>Cancel</button></>}</div></td>}</tr> })}</tbody></table></div> : <EmptyState title="No reservations yet" detail="New bookings will appear here." />}</section>
+    <section className="panel records-panel reservation-panel"><div className="section-title reservation-title"><div><h2>Upcoming reservations</h2><p>Reserved tables are assigned again only when the guest is seated.</p></div><span className="count-badge">{reservations.filter((reservation) => reservation.status === 'booked' && !reservationHasEnded(reservation)).length}</span></div>{reservationsLoading ? <LoadingLines /> : reservations.length ? <div className="table-scroll"><table><thead><tr><th>Guest</th><th>Table</th><th>Guests</th><th>Starts</th><th>Duration</th><th>Status</th>{canReserve && <th />}</tr></thead><tbody>{reservations.map((reservation) => { const shownStatus = displayedReservationStatus(reservation); const pastBooking = shownStatus === 'no-show'; return <tr key={reservation.id}><td><strong>{reservation.guestName}</strong>{reservation.phone && <small className="table-secondary"><ContactLink value={reservation.phone} kind="phone" /></small>}</td><td>{reservation.tableName}</td><td>{reservation.covers}</td><td>{formatDate(reservation.startsAt)}</td><td>{Math.round(((reservation.endsAt?.toDate ? reservation.endsAt.toDate() : new Date(reservation.endsAt)) - (reservation.startsAt?.toDate ? reservation.startsAt.toDate() : new Date(reservation.startsAt))) / 60000) || '—'} min</td><td><span className={`status-pill ${pastBooking ? 'status-cancelled' : reservation.status === 'booked' ? 'status-queued' : reservation.status === 'seated' ? 'status-served' : 'status-cancelled'}`}>{shownStatus}</span></td>{canReserve && <td><div className="row-actions">{reservation.status === 'booked' && !pastBooking && <><button className="button button-small" onClick={() => seat(reservation)}>Seat</button><button className="button button-small button-danger" onClick={() => cancel(reservation)}>Cancel</button></>}</div></td>}</tr> })}</tbody></table></div> : <EmptyState title="No reservations yet" detail="New bookings will appear here." />}</section>
     {editingTable && <FormDialog title={editingTable.id ? 'Edit table' : 'Add table'} fields={tableFields} initial={editingTable} onClose={() => setEditingTable(null)} onSubmit={saveTable} busy={busy} />}
     {creatingReservation && <FormDialog title="New reservation" fields={reservationFields} initial={{ covers: 2, durationMinutes: 90 }} onClose={() => setCreatingReservation(false)} onSubmit={createBooking} busy={busy} />}
     {mergeTarget && <TableMergeDialog target={mergeTarget} tables={tables} onClose={() => setMergeTarget(null)} onMerge={merge} />}
@@ -799,7 +1012,7 @@ function CustomerPage() {
   }
 
   return <><PageHeading eyebrow="GUEST RELATIONSHIPS" title="Customers" description="See recorded visits and lifetime spend from completed payments." action={<button className="button button-primary" onClick={() => setEditing({})}><Plus size={16} /> Add customer</button>} /><LimitNotices sources={[{ truncated, limit, label: 'customers' }]} />{error && <div className="inline-alert">{error}</div>}
-    <section className="panel records-panel"><div className="records-toolbar"><label className="search-field"><Search size={17} /><input aria-label="Search customers" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name, phone or email" /></label><span>{visible.length} customers</span></div>{loading ? <LoadingLines /> : visible.length ? <div className="table-scroll"><table><thead><tr><th>Customer</th><th>Phone</th><th>Visits</th><th>Total spend</th><th /></tr></thead><tbody>{visible.map((customer) => <tr key={customer.id}><td><strong>{customer.name}</strong>{customer.email && <small className="table-secondary">{customer.email}</small>}</td><td>{customer.phone || '—'}</td><td>{customer.visitCount || 0}</td><td>{money(customer.totalSpendingCents || 0)}</td><td><div className="row-actions"><button className="button button-small" onClick={() => setEditing({ ...customer })}>Edit</button><button className="button button-small" onClick={() => showHistory(customer)} disabled={historyBusy}>{historyBusy ? 'Loading…' : 'Order history'}</button></div></td></tr>)}</tbody></table></div> : <EmptyState title="No customers yet" detail="Customers attached to a paid order will appear here." />}</section>
+    <section className="panel records-panel"><div className="records-toolbar"><label className="search-field"><Search size={17} /><input aria-label="Search customers" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name, phone or email" /></label><span>{visible.length} customers</span></div>{loading ? <LoadingLines /> : visible.length ? <div className="table-scroll"><table><thead><tr><th>Customer</th><th>Phone</th><th>Visits</th><th>Total spend</th><th /></tr></thead><tbody>{visible.map((customer) => <tr key={customer.id}><td><strong>{customer.name}</strong>{customer.email && <small className="table-secondary"><ContactLink value={customer.email} kind="email" /></small>}</td><td><ContactLink value={customer.phone} kind="phone" /></td><td>{customer.visitCount || 0}</td><td>{money(customer.totalSpendingCents || 0)}</td><td><div className="row-actions"><button className="button button-small" onClick={() => setEditing({ ...customer })}>Edit</button><button className="button button-small" onClick={() => showHistory(customer)} disabled={historyBusy}>{historyBusy ? 'Loading…' : 'Order history'}</button></div></td></tr>)}</tbody></table></div> : <EmptyState title="No customers yet" detail="Customers attached to a paid order will appear here." />}</section>
     {editing && <FormDialog title={editing.id ? 'Edit customer' : 'Add customer'} fields={fields} initial={editing} onClose={() => setEditing(null)} onSubmit={save} busy={saving} />}
     {history && <CustomerHistoryDialog history={history} onClose={() => setHistory(null)} />}
   </>
@@ -840,7 +1053,7 @@ function RecordWorkspace({ config }) {
   }
   const canCreate = canManage && (!config.readonly || config.collection === 'expenses')
   return <><PageHeading eyebrow={config.eyebrow} title={config.title} description={config.description} action={canCreate && <button className="button button-primary" onClick={() => setEditing({})}><Plus size={16} /> Add {config.title.slice(0, -1).toLowerCase()}</button>} /><LimitNotices sources={[{ truncated, limit, label: config.title.toLowerCase() }]} />
-    {error && <div className="inline-alert">{error}</div>}<section className="panel records-panel"><div className="records-toolbar"><label className="search-field"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${config.title.toLowerCase()}`} /></label><span>{matching.length} records</span></div>{loading ? <LoadingLines /> : matching.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>{config.collection === 'tables' ? 'Seats' : config.collection === 'expenses' ? 'Category' : 'Contact'}</th><th>{config.collection === 'expenses' ? 'Date' : 'Details'}</th><th>{config.collection === 'expenses' ? 'Amount' : 'Status'}</th>{canManage && <th />}</tr></thead><tbody>{matching.map((record) => <tr key={record.id}><td><strong>{record.name || record.description || 'Expense'}</strong></td><td>{record.capacity ? `${record.capacity} seats` : record.category || record.contact || record.phone || '—'}</td><td>{config.collection === 'expenses' ? record.date : record.email || record.unit || '—'}</td><td>{config.collection === 'expenses' ? money(record.amountCents) : record.status || (record.active === false ? 'Disabled' : 'Active')}</td>{canManage && <td><div className="row-actions">{!config.readonly && <button className="button button-small" onClick={() => setEditing(record)}>Edit</button>}{!config.readonly && <button className="icon-button" title="Delete" aria-label="Delete" onClick={() => remove(record)}><Trash2 size={15} /></button>}</div></td>}</tr>)}</tbody></table></div> : <EmptyState title={`No ${config.title.toLowerCase()} yet`} detail="Add your first record to get started." />}</section>
+    {error && <div className="inline-alert">{error}</div>}<section className="panel records-panel"><div className="records-toolbar"><label className="search-field"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${config.title.toLowerCase()}`} /></label><span>{matching.length} records</span></div>{loading ? <LoadingLines /> : matching.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>{config.collection === 'tables' ? 'Seats' : config.collection === 'expenses' ? 'Category' : 'Contact'}</th><th>{config.collection === 'expenses' ? 'Date' : 'Details'}</th><th>{config.collection === 'expenses' ? 'Amount' : 'Status'}</th>{canManage && <th />}</tr></thead><tbody>{matching.map((record) => <tr key={record.id}><td><strong>{record.name || record.description || 'Expense'}</strong></td><td>{record.capacity ? `${record.capacity} seats` : record.category || (record.contact ? <>{record.contact}{record.phone && <small className="table-secondary"><ContactLink value={record.phone} kind="phone" /></small>}</> : <ContactLink value={record.phone} kind="phone" />)}</td><td>{config.collection === 'expenses' ? record.date : record.email ? <ContactLink value={record.email} kind="email" /> : record.unit || '—'}</td><td>{config.collection === 'expenses' ? money(record.amountCents) : record.status || (record.active === false ? 'Disabled' : 'Active')}</td>{canManage && <td><div className="row-actions">{!config.readonly && <button className="button button-small" onClick={() => setEditing(record)}>Edit</button>}{!config.readonly && <button className="icon-button" title="Delete" aria-label="Delete" onClick={() => remove(record)}><Trash2 size={15} /></button>}</div></td>}</tr>)}</tbody></table></div> : <EmptyState title={`No ${config.title.toLowerCase()} yet`} detail="Add your first record to get started." />}</section>
     {editing && <FormDialog title={editing.id ? `Edit ${config.title.slice(0, -1).toLowerCase()}` : `Add ${config.title.slice(0, -1).toLowerCase()}`} fields={config.fields} initial={editing} onClose={() => setEditing(null)} onSubmit={save} busy={busy} />}
   </>
 }
@@ -1032,7 +1245,7 @@ function StaffPage() {
       const result = await runOperation('inviteStaff', values)
       if (membership?.demo) toast.success('Sample invitation saved. No real account or email was created.')
       else {
-        setInviteLink({ ...result, ...values })
+        setInviteLink({ ...result, ...values, inviteUrl: `${window.location.origin}/join/${membership.restaurantId}/${result.id}` })
         setCopyState('')
         toast.success('Invitation created. The share link is shown here.')
       }
@@ -1052,12 +1265,8 @@ function StaffPage() {
       setCopyState(copied ? 'Link copied. You can paste it into a message to the team member.' : 'Link is selected. Copy it with Ctrl+C (or long-press on mobile).')
     }
   }
-  async function sendSetupEmail(email) {
-    if (membership?.demo) return toast.info('Email setup is not part of the sample workspace.')
-    try {
-      await sendPasswordResetEmail(auth, email)
-      toast.success('Firebase sent the password setup/reset email.')
-    } catch (problem) { toast.error(friendlyError(problem)) }
+  async function sendSetupEmail() {
+    toast.info('Password resets are handled by the RestaurantOS administrator.')
   }
   async function deleteMember(staff) {
     if (!window.confirm(`Delete ${staff.displayName || staff.email} from this restaurant? This cannot be undone.`)) return
@@ -1078,17 +1287,17 @@ function StaffPage() {
       setPermissionTarget(null)
     } catch (problem) { toast.error(friendlyError(problem)) } finally { setBusy(false) }
   }
-  return <><PageHeading eyebrow="TEAM ACCESS" title="Staff" description="Invite team members to join with email-verified accounts." action={<div className="staff-heading-actions">{!membership?.demo && pendingInvitations.length > 0 && <button className="button button-subtle" onClick={() => setViewingInvitations(true)}>Pending links ({pendingInvitations.length})</button>}<button className="button button-primary" onClick={() => setInviting(true)}><Plus size={16} /> Add team member</button></div>} /><LimitNotices sources={[{ truncated: staffTruncated, limit: staffLimit, label: 'staff members' }, { truncated: invitationsTruncated, limit: 100, label: 'staff invitations' }]} />{error && <div className="inline-alert">{error}</div>}<div className="security-note"><Users size={18} /><span>Only the owner can invite staff. Sample invitations do not create Firebase accounts.</span></div><section className="panel records-panel">{loading ? <LoadingLines /> : records.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Extra permissions</th><th>Status</th><th /></tr></thead><tbody>{records.map((staff, index) => <tr key={staff.id}><td><strong>{staff.displayName || 'Team member'}</strong></td><td>{staff.email}</td><td><span className="role-tag">{staff.role}</span></td><td>{staff.permissions?.length ? staff.permissions.join(', ') : 'None'}</td><td>{staff.active === false ? 'Disabled' : 'Active'}</td><td><div className="row-actions">{staff.active === false && staff.role !== 'owner' && <button className="button button-small" onClick={() => enable(staff)}>Enable access</button>}{staff.active !== false && staff.role !== 'owner' && <button className="button button-small" onClick={() => sendSetupEmail(staff.email)}>Send setup/reset email</button>}{['cashier', 'waiter'].includes(staff.role) && staff.active !== false && <button className="button button-small" onClick={() => setPermissionTarget(staff)}>Permissions</button>}{staff.role !== 'owner' && <button className="button button-small button-danger" onClick={() => deleteMember(staff)}>{index === 0 ? 'Delete' : 'Remove'}</button>}{staff.active !== false && staff.role !== 'owner' && <button className="button button-small button-danger" onClick={() => disable(staff)}>Disable</button>}</div></td></tr>)}</tbody></table></div> : <EmptyState title="No team members yet" detail="Create an invitation and share its link with your team member." />}</section>{viewingInvitations && <PendingInvitationsDialog invitations={pendingInvitations} onShow={(invitation) => { setInviteLink({ ...invitation, inviteUrl: `${window.location.origin}/join/${membership.restaurantId}/${invitation.id}` }); setViewingInvitations(false) }} onClose={() => setViewingInvitations(false)} />}{inviting && <FormDialog title="Add a team member" fields={fields} initial={{ role: 'cashier' }} onClose={() => setInviting(false)} onSubmit={invite} busy={busy} />}{inviteLink && <InviteLinkDialog invite={inviteLink} inputRef={inviteLinkInput} copyState={copyState} onCopy={copyInviteLink} onClose={() => setInviteLink(null)} />}{permissionTarget && <StaffPermissionsDialog staff={permissionTarget} busy={busy} onClose={() => setPermissionTarget(null)} onSave={savePermissions} />}</>
+  return <><PageHeading eyebrow="TEAM ACCESS" title="Staff" description="Invite team members to join with an account password." action={<div className="staff-heading-actions">{!membership?.demo && pendingInvitations.length > 0 && <button className="button button-subtle" onClick={() => setViewingInvitations(true)}>Pending links ({pendingInvitations.length})</button>}<button className="button button-primary" onClick={() => setInviting(true)}><Plus size={16} /> Add team member</button></div>} /><LimitNotices sources={[{ truncated: staffTruncated, limit: staffLimit, label: 'staff members' }, { truncated: invitationsTruncated, limit: 100, label: 'staff invitations' }]} />{error && <div className="inline-alert">{error}</div>}<div className="security-note"><Users size={18} /><span>Only the owner can invite staff. Sample invitations do not create live accounts.</span></div><section className="panel records-panel">{loading ? <LoadingLines /> : records.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Extra permissions</th><th>Status</th><th /></tr></thead><tbody>{records.map((staff, index) => <tr key={staff.id}><td><strong>{staff.displayName || 'Team member'}</strong></td><td><ContactLink value={staff.email} kind="email" /></td><td><span className="role-tag">{staff.role}</span></td><td>{staff.permissions?.length ? staff.permissions.join(', ') : 'None'}</td><td>{staff.active === false ? 'Disabled' : 'Active'}</td><td><div className="row-actions">{staff.active === false && staff.role !== 'owner' && <button className="button button-small" onClick={() => enable(staff)}>Enable access</button>}{staff.active !== false && staff.role !== 'owner' && <button className="button button-small" onClick={() => sendSetupEmail(staff.email)}>Password help</button>}{['cashier', 'waiter'].includes(staff.role) && staff.active !== false && <button className="button button-small" onClick={() => setPermissionTarget(staff)}>Permissions</button>}{staff.role !== 'owner' && <button className="button button-small button-danger" onClick={() => deleteMember(staff)}>{index === 0 ? 'Delete' : 'Remove'}</button>}{staff.active !== false && staff.role !== 'owner' && <button className="button button-small button-danger" onClick={() => disable(staff)}>Disable</button>}</div></td></tr>)}</tbody></table></div> : <EmptyState title="No team members yet" detail="Create an invitation and share its link with your team member." />}</section>{viewingInvitations && <PendingInvitationsDialog invitations={pendingInvitations} onShow={(invitation) => { setInviteLink({ ...invitation, inviteUrl: `${window.location.origin}/join/${membership.restaurantId}/${invitation.id}` }); setViewingInvitations(false) }} onClose={() => setViewingInvitations(false)} />}{inviting && <FormDialog title="Add a team member" fields={fields} initial={{ role: 'cashier' }} onClose={() => setInviting(false)} onSubmit={invite} busy={busy} />}{inviteLink && <InviteLinkDialog invite={inviteLink} inputRef={inviteLinkInput} copyState={copyState} onCopy={copyInviteLink} onClose={() => setInviteLink(null)} />}{permissionTarget && <StaffPermissionsDialog staff={permissionTarget} busy={busy} onClose={() => setPermissionTarget(null)} onSave={savePermissions} />}</>
 }
 
 function PendingInvitationsDialog({ invitations, onShow, onClose }) {
-  return <div className="modal-backdrop" role="presentation"><section className="modal-panel pending-invitations-dialog" role="dialog" aria-modal="true" aria-labelledby="pending-invitations-title"><div className="modal-heading"><div><p className="eyebrow">TEAM ACCESS</p><h2 id="pending-invitations-title">Pending invitations</h2></div><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div><div className="invitation-list">{invitations.map((invitation) => <article className="invitation-list-item" key={invitation.id}><div><strong>{invitation.displayName}</strong><span>{invitation.email} · {invitation.role}</span><small>Expires {formatDate(invitation.expiresAt)}</small></div><button className="button button-small" onClick={() => onShow(invitation)}>Show link</button></article>)}</div><div className="modal-actions"><button className="button button-subtle" onClick={onClose}>Done</button></div></section></div>
+  return <div className="modal-backdrop" role="presentation"><section className="modal-panel pending-invitations-dialog" role="dialog" aria-modal="true" aria-labelledby="pending-invitations-title"><div className="modal-heading"><div><p className="eyebrow">TEAM ACCESS</p><h2 id="pending-invitations-title">Pending invitations</h2></div><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div><div className="invitation-list">{invitations.map((invitation) => <article className="invitation-list-item" key={invitation.id}><div><strong>{invitation.displayName}</strong><span><ContactLink value={invitation.email} kind="email" /> · {invitation.role}</span><small>Expires {formatDate(invitation.expiresAt)}</small></div><button className="button button-small" onClick={() => onShow(invitation)}>Show link</button></article>)}</div><div className="modal-actions"><button className="button button-subtle" onClick={onClose}>Done</button></div></section></div>
 }
 
 function InviteLinkDialog({ invite, inputRef, copyState, onCopy, onClose }) {
   const emailSubject = encodeURIComponent('Join our restaurant team on RestaurantOS')
   const emailBody = encodeURIComponent(`Hi ${invite.displayName},\n\nPlease open this invitation link to join our restaurant team on RestaurantOS:\n${invite.inviteUrl}\n\nThis link expires in 7 days.`)
-  return <div className="modal-backdrop" role="presentation"><section className="modal-panel invite-link-dialog" role="dialog" aria-modal="true" aria-labelledby="invite-link-title"><div className="modal-heading"><div><p className="eyebrow">TEAM INVITATION</p><h2 id="invite-link-title">Share with {invite.displayName}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div><p className="invite-link-copy">Send this link to <strong>{invite.email}</strong>. They can open it, create their password and join as a {invite.role}. This link expires in 7 days.</p><label className="invite-link-label" htmlFor="staff-invite-url">Invitation link</label><div className="invite-link-row"><input ref={inputRef} id="staff-invite-url" type="text" value={invite.inviteUrl} readOnly onFocus={(event) => event.currentTarget.select()} /><button className="button button-primary" onClick={onCopy}>Copy link</button></div>{copyState && <p className="invite-copy-status" role="status">{copyState}</p>}<div className="modal-actions invite-link-actions"><a className="button button-subtle" href={`mailto:${encodeURIComponent(invite.email)}?subject=${emailSubject}&body=${emailBody}`}>Open email draft</a><button className="button button-subtle" onClick={onClose}>Done</button></div><p className="invite-link-note">RestaurantOS does not send invitation emails automatically. Share this link yourself.</p></section></div>
+  return <div className="modal-backdrop" role="presentation"><section className="modal-panel invite-link-dialog" role="dialog" aria-modal="true" aria-labelledby="invite-link-title"><div className="modal-heading"><div><p className="eyebrow">TEAM INVITATION</p><h2 id="invite-link-title">Share with {invite.displayName}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div><p className="invite-link-copy">Send this link to <strong><ContactLink value={invite.email} kind="email" /></strong>. They can open it, create their password and join as a {invite.role}. This link expires in 7 days.</p><label className="invite-link-label" htmlFor="staff-invite-url">Invitation link</label><div className="invite-link-row"><input ref={inputRef} id="staff-invite-url" type="text" value={invite.inviteUrl} readOnly onFocus={(event) => event.currentTarget.select()} /><button className="button button-primary" onClick={onCopy}>Copy link</button></div>{copyState && <p className="invite-copy-status" role="status">{copyState}</p>}<div className="modal-actions invite-link-actions"><a className="button button-subtle" href={`mailto:${encodeURIComponent(invite.email)}?subject=${emailSubject}&body=${emailBody}`}>Open email draft</a><button className="button button-subtle" onClick={onClose}>Done</button></div><p className="invite-link-note">RestaurantOS does not send invitation emails automatically. Share this link yourself.</p></section></div>
 }
 
 function StaffPermissionsDialog({ staff, busy, onClose, onSave }) {

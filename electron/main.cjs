@@ -1,8 +1,10 @@
-const { app, BrowserWindow, dialog, shell } = require('electron')
+const { app, BrowserWindow, dialog, shell, ipcMain } = require('electron')
 const fs = require('fs')
 const path = require('path')
+const { pathToFileURL } = require('url')
 
 let mainWindow = null
+let posWindow = null
 let databaseInitialized = false
 let fatalDialogShown = false
 let startupComplete = false
@@ -92,6 +94,57 @@ function openRendererDevTools(event) {
     && event.shift
     && (process.platform === 'darwin' ? event.meta && event.alt : event.control)
   return Boolean(isDevToolsShortcut)
+}
+
+function createPosWindow() {
+  if (posWindow && !posWindow.isDestroyed()) {
+    posWindow.show()
+    posWindow.focus()
+    return posWindow
+  }
+
+  const appRoot = app.getAppPath()
+  posWindow = new BrowserWindow({
+    width: 1320,
+    height: 900,
+    minWidth: 1040,
+    minHeight: 720,
+    title: 'RestaurantOS POS Window',
+    backgroundColor: '#0f172a',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(appRoot, 'electron', 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      spellcheck: false,
+      webSecurity: false,
+    },
+  })
+
+  posWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('https:') || url.startsWith('http:')) shell.openExternal(url)
+    return { action: 'deny' }
+  })
+
+  posWindow.on('closed', () => {
+    posWindow = null
+  })
+
+  const devUrl = !app.isPackaged ? process.env.VITE_DEV_SERVER_URL : ''
+  const startUrl = !app.isPackaged ? process.env.ELECTRON_START_URL : ''
+  const baseIndexUrl = pathToFileURL(path.join(appRoot, 'dist', 'index.html')).href
+  const targetRoute = '#/pos-window'
+
+  const loadPromise = devUrl
+    ? posWindow.loadURL(new URL(`${devUrl.replace(/\/$/, '')}${targetRoute}`).toString())
+    : startUrl
+      ? posWindow.loadURL(new URL(`${startUrl.replace(/\/$/, '')}${targetRoute}`).toString())
+      : posWindow.loadURL(`${baseIndexUrl}${targetRoute}`)
+
+  loadPromise.catch((error) => handleFatalError('The dedicated POS window failed to open.', error))
+
+  return posWindow
 }
 
 function createWindow() {
@@ -205,6 +258,11 @@ function createWindow() {
     })
   }
 }
+
+ipcMain.handle('pos:open-window', () => {
+  createPosWindow()
+  return { ok: true }
+})
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {

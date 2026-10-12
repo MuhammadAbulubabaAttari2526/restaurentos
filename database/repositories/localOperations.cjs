@@ -76,8 +76,13 @@ function runLocalOperation(restaurantId, name, payload = {}) {
       }
 
       const taxableSubtotal = Math.max(0, subtotalCents - discountCents)
-      const taxRate = typeof payload.taxRate === 'number' ? payload.taxRate : 0
-      const taxCents = Math.round((taxableSubtotal * taxRate) / 100)
+      const settings = genericRepository.query(restaurantId, 'settings', [], 10)
+      const profile = settings.find((entry) => entry.id === 'profile') || settings[0]
+      const configuredTaxRate = Number(profile?.taxRate)
+      const taxRate = Number.isFinite(configuredTaxRate) && configuredTaxRate >= 0 && configuredTaxRate <= 1
+        ? configuredTaxRate
+        : 0
+      const taxCents = Math.round(taxableSubtotal * taxRate)
       const totalCents = taxableSubtotal + taxCents
 
       const orderNumber = getNextOrderNumber(db, restaurantId)

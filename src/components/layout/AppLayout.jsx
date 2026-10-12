@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { Link, NavLink, useLocation } from 'react-router-dom'
 import {
   BarChart3, ClipboardList, CreditCard, LayoutDashboard,
   History, LogOut, Menu, Package, Settings, ShoppingBasket,
@@ -14,7 +14,7 @@ const links = [
   { label: 'Point of sale', path: '/pos', icon: CreditCard, roles: ['owner', 'manager', 'cashier', 'waiter'] },
   { label: 'Orders', path: '/orders', icon: ClipboardList, roles: ['owner', 'manager', 'cashier', 'waiter'] },
   { label: 'Tables', path: '/tables', icon: Utensils, roles: ['owner', 'manager', 'cashier', 'waiter'] },
-  { label: 'Add Waiters', path: '/waiters', icon: UserCheck, roles: ['owner', 'manager'] },
+  { label: 'Waiters', path: '/waiters', icon: UserCheck, roles: ['owner', 'manager'] },
   { label: 'Menu', path: '/menu', icon: Store, roles: ['owner', 'manager'] },
   { label: 'Inventory', path: '/inventory', icon: Package, roles: ['owner', 'manager'] },
   { label: 'Suppliers', path: '/suppliers', icon: Truck, roles: ['owner', 'manager'] },
@@ -28,6 +28,8 @@ const links = [
 ]
 
 const pageNames = Object.fromEntries(links.map(({ path, label }) => [path, label]))
+pageNames['/pos-window'] = 'Point of sale'
+const copyrightYear = new Date().getFullYear()
 
 export function AppLayout({ children }) {
   const { user, membership, logout } = useAuth()
@@ -36,10 +38,14 @@ export function AppLayout({ children }) {
   const [appVersion, setAppVersion] = useState('')
   const syncState = useSync()
   const location = useLocation()
+  const currentPath = (location.pathname.replace(/\/+$/, '') || '/').toLowerCase()
   const role = membership?.role || 'staff'
   const visibleLinks = links.filter((link) => link.roles.includes(role))
   const menuButtonRef = useRef(null)
   const closeButtonRef = useRef(null)
+  const sidebarRef = useRef(null)
+  const pageContentRef = useRef(null)
+  const homePath = ['cashier', 'waiter'].includes(role) ? '/pos' : '/dashboard'
 
   const syncStatusLabel = !syncState.isOnline
     ? 'Offline / آف لائن'
@@ -58,6 +64,25 @@ export function AppLayout({ children }) {
 
   function closeDrawer() {
     setDrawerOpen(false)
+  }
+
+  function openPosWindow(event, targetPath) {
+    if (targetPath !== '/pos') return
+    event.preventDefault()
+    closeDrawer()
+
+    if (window.posApi?.isElectron && typeof window.posApi?.openPosWindow === 'function') {
+      window.posApi.openPosWindow()
+      return
+    }
+
+    const currentUrl = new URL(window.location.href)
+    const targetUrl = `${currentUrl.origin}/pos-window`
+    const newWindowUrl = currentUrl.protocol === 'file:' || currentUrl.hash.startsWith('#/')
+      ? `${currentUrl.origin}${currentUrl.pathname}#/pos-window`
+      : targetUrl
+
+    window.open(newWindowUrl, '_blank', 'noopener,noreferrer')
   }
 
   useEffect(() => {
@@ -79,11 +104,57 @@ export function AppLayout({ children }) {
   }, [])
 
   useEffect(() => {
+    const mobileQuery = window.matchMedia?.('(max-width: 820px)')
+    if (!mobileQuery) return undefined
+    function closeOnDesktop(event) {
+      if (!event.matches) setDrawerOpen(false)
+    }
+    mobileQuery.addEventListener?.('change', closeOnDesktop)
+    return () => mobileQuery.removeEventListener?.('change', closeOnDesktop)
+  }, [])
+
+  useEffect(() => {
+    const pageContent = pageContentRef.current
+    if (!pageContent || typeof MutationObserver === 'undefined') return undefined
+
+    function addMobileTableLabels() {
+      pageContent.querySelectorAll('.table-scroll table').forEach((table) => {
+        const headerCells = Array.from(table.tHead?.rows[0]?.cells || [])
+        if (!headerCells.length) return
+        const labels = headerCells.map((cell) => cell.textContent.trim().replace(/\s+/g, ' '))
+        table.querySelectorAll('tbody tr').forEach((row) => {
+          Array.from(row.cells).forEach((cell, index) => {
+            const label = labels[index] || ''
+            if (cell.dataset.label !== label) cell.dataset.label = label
+          })
+        })
+      })
+    }
+
+    addMobileTableLabels()
+    const observer = new MutationObserver(addMobileTableLabels)
+    observer.observe(pageContent, { childList: true, characterData: true, subtree: true })
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
     if (!drawerOpen) return undefined
     const previousOverflow = document.body.style.overflow
     const menuButton = menuButtonRef.current
     function handleKeyDown(event) {
       if (event.key === 'Escape') closeDrawer()
+      if (event.key !== 'Tab') return
+      const focusable = sidebarRef.current?.querySelectorAll('a[href], button:not(:disabled)')
+      if (!focusable?.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     document.body.style.overflow = 'hidden'
     window.addEventListener('keydown', handleKeyDown)
@@ -98,10 +169,12 @@ export function AppLayout({ children }) {
   return (
     <div className="app-frame">
       {drawerOpen && <button className="drawer-scrim" aria-label="Close navigation" onClick={closeDrawer} />}
-      <aside id="workspace-navigation" aria-label="Workspace navigation" className={`sidebar ${drawerOpen ? 'sidebar-open' : ''}`}>
+      <aside ref={sidebarRef} id="workspace-navigation" aria-label="Workspace navigation" role={drawerOpen ? 'dialog' : undefined} aria-modal={drawerOpen ? 'true' : undefined} className={`sidebar ${drawerOpen ? 'sidebar-open' : ''}`}>
         <div className="brand-lockup">
-          <div className="brand-mark"><Utensils size={19} /></div>
-          <div><strong>RestaurantOS</strong><span>Operations</span></div>
+          <Link to={homePath} className="brand-home-link" aria-label="RestaurantOS home" onClick={closeDrawer}>
+            <span className="brand-mark"><Utensils size={19} /></span>
+            <span className="brand-home-copy"><strong>RestaurantOS</strong><span>Operations</span></span>
+          </Link>
           <button ref={closeButtonRef} className="icon-button sidebar-close" aria-label="Close navigation" onClick={closeDrawer}><X size={19} /></button>
         </div>
         <div className="restaurant-picker">
@@ -111,13 +184,20 @@ export function AppLayout({ children }) {
         <p className="nav-caption">WORKSPACE</p>
         <nav className="main-nav" aria-label="Main navigation">
           {visibleLinks.map(({ label, path, icon: Icon }) => (
-            <NavLink key={path} to={path} onClick={closeDrawer} className={({ isActive }) => `nav-link ${isActive ? 'nav-active' : ''}`}>
+            <NavLink
+              key={path}
+              to={path}
+              onClick={(event) => {
+                closeDrawer()
+                openPosWindow(event, path)
+              }}
+              className={({ isActive }) => `nav-link ${isActive ? 'nav-active' : ''}`}
+            >
               <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
             </NavLink>
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="help-panel"><div className="help-glyph">?</div><div><strong>Need a hand?</strong><span>Check setup guide</span></div></div>
           <button className="profile-row" onClick={logout}>
             <div className="profile-avatar">{(user?.email || 'U').slice(0, 1).toUpperCase()}</div>
             <div className="profile-details"><strong>{user?.displayName || user?.email?.split('@')[0] || 'Team member'}</strong><span>{role}</span></div>
@@ -134,7 +214,7 @@ export function AppLayout({ children }) {
           <div className="breadcrumbs">
             <span>Workspace</span>
             <span>/</span>
-            <strong>{pageNames[location.pathname] || 'Restaurant operations'}</strong>
+            <strong>{pageNames[currentPath] || 'Page not found'}</strong>
           </div>
           <div className="topbar-right">
             {typeof window !== 'undefined' && window.posApi?.isElectron ? (
@@ -156,10 +236,16 @@ export function AppLayout({ children }) {
             )}
           </div>
         </header>
-        <main className="page-content">
+        <main ref={pageContentRef} className="page-content">
           {membership?.demo && <div className="demo-banner"><strong>Sample data only</strong><span>Changes reset when you sign out or refresh this tab.</span></div>}
           {children}
         </main>
+        <footer className="workspace-footer">
+          <span>© {copyrightYear} RestaurantOS</span>
+          <nav aria-label="Footer navigation">
+            {visibleLinks.slice(0, 3).map(({ label, path }) => <NavLink key={path} to={path} onClick={(event) => openPosWindow(event, path)}>{label}</NavLink>)}
+          </nav>
+        </footer>
       </div>
     </div>
   )

@@ -57,7 +57,9 @@
     }
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -k \"node --watch server/index.js\" \"vite\"",
+    "api": "node server/index.js",
+    "api:dev": "node --watch server/index.js",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
@@ -70,14 +72,12 @@
     "verify:sqlite": "node scripts/verify-sqlite-native.cjs",
     "test": "vitest run",
     "test:electron": "electron test-electron-headless.cjs",
-    "test:watch": "vitest",
-    "test:rules": "firebase emulators:exec --project demo-restaurantos --only firestore \"vitest run src/tests/firestore.rules.test.js\""
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
     "better-sqlite3": "^13.0.3",
     "electron-updater": "^6.8.9",
-    "firebase": "^12.19.0",
     "lucide-react": "^1.49.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -88,7 +88,6 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@firebase/rules-unit-testing": "^5.0.2",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
@@ -99,7 +98,6 @@
     "cross-env": "^10.1.0",
     "electron": "^44.5.1",
     "electron-builder": "^26.15.3",
-    "firebase-tools": "^15.32.0",
     "jsdom": "^30.1.1",
     "oxlint": "^1.81.0",
     "tailwindcss": "^4.3.3",

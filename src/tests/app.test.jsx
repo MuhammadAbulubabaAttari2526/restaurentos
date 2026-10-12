@@ -56,6 +56,45 @@ describe('authentication routes', () => {
     expect(await screen.findByText('Cedar & Sage')).toBeInTheDocument()
   })
 
+  it('opens the POS in a dedicated Electron window instead of reusing the main app shell', async () => {
+    activateDemoSession()
+    const openPosWindow = vi.fn()
+    window.posApi = {
+      isElectron: true,
+      openPosWindow,
+      system: { getInfo: vi.fn().mockResolvedValue({ appVersion: '1.0.0' }) },
+    }
+
+    renderApp('/dashboard')
+
+    const mainNav = await screen.findByRole('navigation', { name: /main navigation/i })
+    fireEvent.click(within(mainNav).getByRole('link', { name: /point of sale/i }))
+
+    await waitFor(() => expect(openPosWindow).toHaveBeenCalledTimes(1))
+  })
+
+  it('opens a standalone POS tab when the app is running in the browser', async () => {
+    activateDemoSession()
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    delete window.posApi
+
+    renderApp('/dashboard')
+
+    const mainNav = await screen.findByRole('navigation', { name: /main navigation/i })
+    fireEvent.click(within(mainNav).getByRole('link', { name: /point of sale/i }))
+
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith(expect.stringContaining('/pos-window'), '_blank', 'noopener,noreferrer'))
+  })
+
+  it('renders the POS view for nested standalone-window routes instead of the workspace access warning', async () => {
+    activateDemoSession()
+
+    renderApp('/dashboard/pos-window')
+
+    expect(await screen.findByRole('heading', { name: /point of sale/i })).toBeInTheDocument()
+    expect(screen.queryByText(/this workspace is not available for your role/i)).not.toBeInTheDocument()
+  })
+
   it('closes the mobile navigation with Escape and restores focus', async () => {
     renderApp('/login')
     fireEvent.click(await screen.findByRole('button', { name: /open sample workspace/i }))
@@ -142,6 +181,7 @@ describe('authentication routes', () => {
 
   it('defaults dine-in guests to one and submits the chosen cover count', async () => {
     activateDemoSession()
+    saveDemoRecord('tables', { capacity: 4 }, 'table-2')
     const createOrder = vi.spyOn(dataOperations, 'createOrder').mockResolvedValue({
       orderId: 'covers-order', orderNumber: 'R-COVERS', subtotalCents: 32000,
       discountCents: 0, taxCents: 0, totalCents: 32000,

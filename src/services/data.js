@@ -1,41 +1,27 @@
-import {
-  addDoc,
-  collection,
-  doc,
-  deleteDoc,
-  limit,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  updateDoc,
-  where,
-} from 'firebase/firestore'
-import { db } from '../lib/firebase.js'
+import { apiRequest } from './apiClient.js'
 import { isDemoSession, removeDemoRecord, runDemoOperation, saveDemoRecord, watchDemoRecords } from './demoData.js'
-import { runSparkOperation } from './sparkOperations.js'
+
+const WEB_REFRESH_MS = 5000
 
 export function isElectron() {
   return typeof window !== 'undefined' && Boolean(window.posApi?.isElectron)
 }
 
-// ─── Local Reactivity Bus for Electron Mode ─────────────────────────────────
+function callDataFunction(name, payload = {}) {
+  return apiRequest(name, { method: 'POST', body: payload }).then((result) => result.data)
+}
+
+// Local Reactivity Bus for Electron Mode
 const electronWatchers = new Map()
 let syncStatusListenerAttached = false
 
 function notifyWatchers(collectionName) {
-  if (electronWatchers.has(collectionName)) {
-    for (const watcher of electronWatchers.get(collectionName)) {
-      watcher.fetch()
-    }
-  }
+  for (const watcher of electronWatchers.get(collectionName) || []) watcher.fetch()
 }
 
 function notifyAllWatchers() {
-  for (const set of electronWatchers.values()) {
-    for (const watcher of set) {
-      watcher.fetch()
-    }
+  for (const watchers of electronWatchers.values()) {
+    for (const watcher of watchers) watcher.fetch()
   }
 }
 
@@ -43,16 +29,8 @@ function attachSyncStatusListener() {
   if (syncStatusListenerAttached || !isElectron()) return
   syncStatusListenerAttached = true
   window.posApi.sync.onStatusChange((status) => {
-    // Whenever sync pull completes or queue updates, refresh active views
-    if (status.status === 'idle' || status.status === 'syncing') {
-      notifyAllWatchers()
-    }
+    if (status.status === 'idle' || status.status === 'syncing') notifyAllWatchers()
   })
-}
-
-export function restaurantCollection(restaurantId, name) {
-  if (!db || !restaurantId) throw new Error('A configured Firebase restaurant session is required.')
-  return collection(db, 'restaurants', restaurantId, name)
 }
 
 export function watchRecords(restaurantId, name, onData, onError, max = 100, filters = []) {
@@ -60,98 +38,104 @@ export function watchRecords(restaurantId, name, onData, onError, max = 100, fil
 
   if (isElectron()) {
     attachSyncStatusListener()
-
-    if (!electronWatchers.has(name)) {
-      electronWatchers.set(name, new Set())
-    }
-
-    let isSubscribed = true
+    if (!electronWatchers.has(name)) electronWatchers.set(name, new Set())
+    let subscribed = true
+    let fetching = false
+    let lastError = ''
     const fetch = async () => {
+      if (!subscribed || fetching) return
+      fetching = true
       try {
         const records = await window.posApi.db.query(restaurantId, name, filters, max)
-        if (isSubscribed) {
-          onData(records || [])
-        }
-      } catch (err) {
-        if (isSubscribed && onError) {
-          onError(err)
-        }
+        if (subscribed) onData(records || [])
+        lastError = ''
+      } catch (error) {
+        if (subscribed && onError && error.message !== lastError) onError(error)
+        lastError = error.message
+      } finally {
+        fetching = false
       }
     }
-
     const watcher = { fetch }
     electronWatchers.get(name).add(watcher)
     fetch()
-
     return () => {
-      isSubscribed = false
+      subscribed = false
       electronWatchers.get(name)?.delete(watcher)
     }
   }
 
-  // Web Firebase Firestore mode
-  const source = query(
-    restaurantCollection(restaurantId, name),
-    ...filters.map(([field, operator, value]) => where(field, operator, value)),
-    orderBy('createdAt', 'desc'),
-    limit(max),
-  )
-  return onSnapshot(source, (snapshot) => {
-    onData(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })))
-  }, onError)
+  let subscribed = true
+  let fetching = false
+  let lastError = ''
+  const fetch = async () => {
+    if (!subscribed || fetching) return
+    fetching = true
+    try {
+      const records = await callDataFunction('getRecords', { restaurantId, collection: name, max, filters })
+      if (subscribed) onData(records || [])
+      lastError = ''
+    } catch (error) {
+      if (subscribed && onError && error.message !== lastError) onError(error)
+      lastError = error.message
+    } finally {
+      fetching = false
+    }
+  }
+  fetch()
+  const interval = setInterval(fetch, WEB_REFRESH_MS)
+  return () => {
+    subscribed = false
+    clearInterval(interval)
+  }
 }
 
 export async function saveRecord(restaurantId, name, values, id) {
   if (isDemoSession()) return saveDemoRecord(name, values, id)
-
   if (isElectron()) {
     const savedId = await window.posApi.db.upsert(restaurantId, name, values, id)
     notifyWatchers(name)
     return savedId
   }
-
-  const target = restaurantCollection(restaurantId, name)
-  if (id) {
-    await updateDoc(doc(target, id), { ...values, updatedAt: serverTimestamp() })
-    return id
-  }
-  const record = await addDoc(target, { ...values, createdAt: serverTimestamp() })
-  return record.id
+  const result = await callDataFunction('saveRecord', { restaurantId, collection: name, values, id: id || null })
+  return result.id
 }
 
 export async function removeRecord(restaurantId, name, id) {
   if (isDemoSession()) return removeDemoRecord(name, id)
-
   if (isElectron()) {
     await window.posApi.db.delete(restaurantId, name, id)
     notifyWatchers(name)
     return
   }
-
-  await deleteDoc(doc(restaurantCollection(restaurantId, name), id))
+  await callDataFunction('removeRecord', { restaurantId, collection: name, id })
 }
 
 export async function runOperation(name, payload = {}) {
   if (isDemoSession()) return runDemoOperation(name, payload)
-
   if (isElectron()) {
-    const restaurantId =
-      payload.restaurantId ||
-      window.sessionStorage.getItem('activeRestaurantId') ||
-      'default'
-
+    const restaurantId = payload.restaurantId || window.sessionStorage.getItem('activeRestaurantId') || 'default'
     const actorId = window.sessionStorage.getItem('activeUserId')
-    const localPayload = {
-      ...payload,
-      createdBy: payload.createdBy || actorId,
-      recordedBy: payload.recordedBy || actorId,
-    }
+    const localPayload = { ...payload, createdBy: payload.createdBy || actorId, recordedBy: payload.recordedBy || actorId }
     const result = await window.posApi.pos.runOperation(restaurantId, name, localPayload)
     notifyAllWatchers()
     return result
   }
+  const result = await callDataFunction(name, payload)
+  notifyAllWatchers()
+  return result
+}
 
-  return runSparkOperation(name, payload)
+export async function getMembership() {
+  return callDataFunction('getMembership')
+}
+
+export async function getStaffInvitation(restaurantId, invitationId) {
+  return callDataFunction('getStaffInvitation', { restaurantId, invitationId })
+}
+
+export async function completeStaffInvite(restaurantId, invitationId) {
+  return callDataFunction('completeStaffInvite', { restaurantId, invitationId })
 }
 
 export async function createOrder(payload) {

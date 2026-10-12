@@ -1,18 +1,47 @@
 import { randomBytes } from 'node:crypto'
-import { initializeApp } from 'firebase-admin/app'
-import { getAuth } from 'firebase-admin/auth'
-import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore'
-import { HttpsError, onCall } from 'firebase-functions/v2/https'
+import { HttpsError, onCall, onRequest } from './httpCompat.js'
+import { getMongoAuth } from './mongoAuth.js'
+import { getFirestoreCompat, FieldValue, Timestamp } from './mongoFirestoreCompat.js'
 import { applyPayment, applyRefund, calculateRecipeNeeds, priceMenuLine } from './domain.js'
 
-initializeApp()
-const db = getFirestore()
-const auth = getAuth()
+const db = getFirestoreCompat()
+const auth = getMongoAuth()
 const timestamp = () => FieldValue.serverTimestamp()
 const roles = new Set(['owner', 'manager', 'cashier', 'waiter'])
 const canCreateOrders = ['owner', 'manager', 'cashier', 'waiter']
 const canReadFinance = ['owner', 'manager', 'cashier']
-const options = { region: 'us-central1', enforceAppCheck: process.env.ENFORCE_APP_CHECK === 'true' }
+const options = {}
+const readableCollections = {
+  settings: ['owner', 'manager', 'cashier', 'waiter'],
+  staffInvitations: ['owner'],
+  users: ['owner', 'manager'],
+  categories: canCreateOrders,
+  menuItems: canCreateOrders,
+  waiters: canCreateOrders,
+  orders: canCreateOrders,
+  draftOrders: canCreateOrders,
+  tables: canCreateOrders,
+  reservations: canCreateOrders,
+  orderFinancials: canReadFinance,
+  payments: canReadFinance,
+  customers: canReadFinance,
+  inventory: canCreateOrders,
+  stockMovements: ['owner', 'manager'],
+  suppliers: ['owner', 'manager'],
+  purchases: ['owner', 'manager'],
+  expenses: ['owner', 'manager'],
+  auditLogs: ['owner', 'manager'],
+}
+const editableCollections = {
+  categories: { roles: ['owner', 'manager'], fields: ['name'] },
+  menuItems: { roles: ['owner', 'manager'], fields: ['name', 'description', 'categoryId', 'categoryName', 'priceCents', 'available', 'imageUrl', 'variants', 'addOns', 'recipe'] },
+  waiters: { roles: ['owner', 'manager'], fields: ['name', 'phone', 'status'] },
+  tables: { roles: ['owner', 'manager'], fields: ['name', 'capacity'] },
+  customers: { roles: canReadFinance, fields: ['name', 'phone', 'email'] },
+  inventory: { roles: ['owner', 'manager'], fields: ['name', 'unit', 'reorderLevel'] },
+  suppliers: { roles: ['owner', 'manager'], fields: ['name', 'contact', 'phone', 'email'] },
+  settings: { roles: ['owner'], fields: ['name', 'currency', 'taxRate', 'paymentMethods'] },
+}
 
 function fail(code, message) {
   throw new HttpsError(code, message)
@@ -789,45 +818,23 @@ export const inviteStaff = onCall(options, (request) => withActor(request, async
   const email = requiredString(data.email, 'Email', 254).toLowerCase()
   const displayName = requiredString(data.displayName, 'Name', 100)
   const role = roles.has(data.role) && data.role !== 'owner' ? data.role : fail('invalid-argument', 'Choose a valid staff role.')
-  let user
-  let setupRequired = false
-  try {
-    user = await auth.createUser({ email, displayName, password: randomBytes(32).toString('base64url'), emailVerified: false, disabled: false })
-    setupRequired = true
-  } catch (error) {
-    if (error.code !== 'auth/email-already-exists') throw error
-    user = await auth.getUserByEmail(email)
-    if (user.disabled) fail('failed-precondition', 'This Firebase account is disabled.')
-    if (user.customClaims?.restaurantId) fail('already-exists', 'This account is already assigned to a restaurant.')
-  }
-  const memberRef = subcollection(actor.restaurantId, 'users').doc(user.uid)
-  const auditRefForInvite = auditRef(actor.restaurantId)
-  const existingMember = await memberRef.get()
-  if (existingMember.exists) {
-    if (setupRequired) await auth.deleteUser(user.uid).catch(() => {})
-    fail('already-exists', 'This team member is already set up for this restaurant.')
-  }
-  const previousClaims = user.customClaims || {}
-  const memberBatch = db.batch()
-  memberBatch.create(memberRef, { email, displayName: displayName || user.displayName || email, role, active: true, permissions: [], createdAt: timestamp(), createdBy: actor.uid })
-  memberBatch.create(auditRefForInvite, { action: 'staff.invited', entityId: user.uid, actorId: actor.uid, createdAt: timestamp() })
-  let membershipCreated = false
-  try {
-    await memberBatch.commit()
-    membershipCreated = true
-    await auth.setCustomUserClaims(user.uid, { ...previousClaims, restaurantId: actor.restaurantId, role })
-    return { userId: user.uid, setupRequired }
-  } catch (error) {
-    if (membershipCreated) {
-      const cleanup = db.batch()
-      cleanup.delete(memberRef)
-      cleanup.delete(auditRefForInvite)
-      await cleanup.commit().catch(() => {})
-    }
-    await auth.setCustomUserClaims(user.uid, previousClaims).catch(() => {})
-    if (setupRequired) await auth.deleteUser(user.uid).catch(() => {})
-    throw error
-  }
+  const invitationId = randomBytes(16).toString('hex')
+  const invitationRef = subcollection(actor.restaurantId, 'staffInvitations').doc(invitationId)
+  await db.runTransaction(async (transaction) => {
+    transaction.create(invitationRef, {
+      restaurantId: actor.restaurantId,
+      email,
+      displayName,
+      role,
+      active: true,
+      status: 'open',
+      createdBy: actor.uid,
+      createdAt: timestamp(),
+      expiresAt: new Date(Date.now() + 7 * 86400000),
+    })
+    transaction.create(auditRef(actor.restaurantId), { action: 'staff.invitation_created', entityId: invitationId, actorId: actor.uid, createdAt: timestamp() })
+  })
+  return { id: invitationId }
 }))
 
 export const createOwnerRestaurant = onCall(options, async (request) => {
@@ -942,7 +949,7 @@ export const getDashboardSummary = onCall(options, (request) => withActor(reques
   for (const orderDoc of trendSnapshot.docs) {
     const financial = orderDoc.data()
     if (financial.paymentStatus !== 'paid' || financial.status !== 'active') continue
-    const date = financial.createdAt.toDate()
+    const date = new Date(financial.createdAt)
     const entry = days.get(localDayKey(date))
     if (entry) entry.grossSalesCents += financial.subtotalCents
   }
@@ -980,7 +987,7 @@ export const exportReport = onCall(options, (request) => withActor(request, asyn
   for (const financialDoc of financialSnapshot.docs) {
     const financial = financialDoc.data()
     if (financial.status !== 'active') continue
-    const day = localDayKey(financial.createdAt.toDate())
+    const day = localDayKey(new Date(financial.createdAt))
     if (!totalsByDay.has(day)) totalsByDay.set(day, { date: day, orderCount: 0, grossSalesCents: 0, taxCents: 0, refundsCents: 0 })
     const row = totalsByDay.get(day)
     row.orderCount += 1
@@ -1068,3 +1075,366 @@ export const getCustomerHistory = onCall(options, (request) => withActor(request
     rows: rows.filter(Boolean),
   }
 }))
+
+export const getMembership = onCall(options, async (request) => {
+  if (!request.auth?.uid) fail('unauthenticated', 'Sign in to continue.')
+  let restaurantId = request.auth.token.restaurantId
+  let role = request.auth.token.role
+  if (!restaurantId || !roles.has(role)) {
+    const account = await db.doc(`accountMemberships/${request.auth.uid}`).get()
+    if (!account.exists || account.get('active') !== true) return null
+    restaurantId = account.get('restaurantId')
+    role = account.get('role')
+  }
+  if (typeof restaurantId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(restaurantId) || !roles.has(role)) return null
+  const member = await db.doc(`restaurants/${restaurantId}/users/${request.auth.uid}`).get()
+  if (!member.exists || member.get('active') !== true || member.get('role') !== role) return null
+  return { restaurantId, role, permissions: member.get('permissions') || [] }
+})
+
+export const getRecords = onCall(options, (request) => withActor(request, async (actor, data) => {
+  const name = requiredString(data.collection, 'Collection', 64)
+  const readRoles = readableCollections[name]
+  if (!readRoles) fail('invalid-argument', 'This collection cannot be read from the workspace.')
+  if (data.restaurantId && data.restaurantId !== actor.restaurantId) fail('permission-denied', 'You cannot read another restaurant.')
+  if (!readRoles.includes(actor.role) && !(name === 'orderFinancials' && mayUsePermission(actor, 'voidOrders'))) {
+    fail('permission-denied', 'You do not have permission to view this information.')
+  }
+  const max = Number.isInteger(data.max) && data.max > 0 ? Math.min(data.max, 500) : 100
+  let query = subcollection(actor.restaurantId, name)
+  if (name === 'draftOrders' && !['owner', 'manager'].includes(actor.role)) query = query.where('createdBy', '==', actor.uid)
+  if (!Array.isArray(data.filters) || data.filters.length > 10) fail('invalid-argument', 'The requested filters are invalid.')
+  for (const filter of data.filters) {
+    if (!Array.isArray(filter) || filter.length !== 3) fail('invalid-argument', 'The requested filters are invalid.')
+    const [field, operator, value] = filter
+    if (typeof field !== 'string' || !/^[A-Za-z][A-Za-z0-9_.-]{0,127}$/.test(field)) fail('invalid-argument', 'A filter field is invalid.')
+    if (!['==', '<', '<=', '>', '>=', 'in'].includes(operator)) fail('invalid-argument', 'A filter operator is invalid.')
+    query = query.where(field, operator, value)
+  }
+  const snapshot = await query.orderBy('createdAt', 'desc').limit(max).get()
+  return snapshot.docs.map((entry) => ({ ...entry.data(), id: entry.id }))
+}))
+
+export const saveRecord = onCall(options, (request) => withActor(request, async (actor, data) => {
+  const name = requiredString(data.collection, 'Collection', 64)
+  const config = editableCollections[name]
+  if (!config) fail('permission-denied', 'This information must be changed through its approved workflow.')
+  requireRole(actor, config.roles)
+  if (data.restaurantId !== actor.restaurantId) fail('permission-denied', 'You cannot edit another restaurant.')
+  if (!data.values || typeof data.values !== 'object' || Array.isArray(data.values)) fail('invalid-argument', 'Enter valid record details.')
+  const input = data.values
+  const allowed = new Set(config.fields)
+  if (Object.keys(input).some((field) => !allowed.has(field))) fail('invalid-argument', 'The record contains fields that cannot be changed here.')
+  if (Buffer.byteLength(JSON.stringify(input)) > 48 * 1024) fail('invalid-argument', 'The record is too large.')
+  const values = { ...input }
+  const cleanText = (field, label, max = 160, required = false) => {
+    const value = String(values[field] ?? '').trim()
+    if (required && !value) fail('invalid-argument', `${label} is required.`)
+    if (value.length > max) fail('invalid-argument', `${label} is too long.`)
+    values[field] = value
+  }
+
+  if (name === 'categories') cleanText('name', 'Category name', 80, true)
+  if (name === 'menuItems') {
+    cleanText('name', 'Menu item name', 120, true)
+    cleanText('description', 'Description', 500)
+    cleanText('categoryName', 'Category name', 80)
+    if (!Number.isSafeInteger(values.priceCents) || values.priceCents < 0 || values.priceCents > 100000000) fail('invalid-argument', 'Enter a valid item price.')
+    if (typeof values.available !== 'boolean') fail('invalid-argument', 'Choose whether this item is available.')
+    if (typeof values.imageUrl !== 'string' || values.imageUrl.length > 2048 || (values.imageUrl && !values.imageUrl.startsWith('https://'))) fail('invalid-argument', 'Enter a valid HTTPS image URL.')
+    for (const field of ['variants', 'addOns', 'recipe']) if (!Array.isArray(values[field]) || values[field].length > (field === 'recipe' ? 30 : 20)) fail('invalid-argument', `The ${field} list is invalid.`)
+  }
+  if (name === 'waiters') {
+    cleanText('name', 'Waiter name', 120, true)
+    cleanText('phone', 'Phone number', 40)
+    values.status ||= 'active'
+    if (!['active', 'inactive'].includes(values.status)) fail('invalid-argument', 'Choose a valid waiter status.')
+  }
+  if (name === 'tables') {
+    cleanText('name', 'Table name', 80, true)
+    if (!Number.isInteger(Number(values.capacity)) || Number(values.capacity) < 1 || Number(values.capacity) > 100) fail('invalid-argument', 'Enter a valid seating capacity.')
+    values.capacity = Number(values.capacity)
+  }
+  if (name === 'customers') {
+    cleanText('name', 'Customer name', 120, true)
+    cleanText('phone', 'Phone number', 40)
+    cleanText('email', 'Email address', 254)
+    if (values.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) fail('invalid-argument', 'Enter a valid email address.')
+  }
+  if (name === 'inventory') {
+    cleanText('name', 'Ingredient name', 120, true)
+    cleanText('unit', 'Unit', 32, true)
+    values.reorderLevel = Number(values.reorderLevel)
+    if (!Number.isFinite(values.reorderLevel) || values.reorderLevel < 0 || values.reorderLevel > 100000000) fail('invalid-argument', 'Enter a valid low-stock threshold.')
+  }
+  if (name === 'suppliers') {
+    cleanText('name', 'Supplier name', 120, true)
+    cleanText('contact', 'Contact name', 120)
+    cleanText('phone', 'Phone number', 40)
+    cleanText('email', 'Email address', 254)
+  }
+  if (name === 'settings') {
+    if (data.id !== 'profile') fail('invalid-argument', 'Restaurant settings use the profile record.')
+    cleanText('name', 'Restaurant name', 120, true)
+    if (values.currency !== 'PKR') fail('invalid-argument', 'The restaurant currency is not supported.')
+    if (!Number.isFinite(values.taxRate) || values.taxRate < 0 || values.taxRate > 1) fail('invalid-argument', 'Enter a valid tax rate.')
+    if (!Array.isArray(values.paymentMethods) || values.paymentMethods.length < 1 || values.paymentMethods.length > 3 || values.paymentMethods.some((method) => !['cash', 'card', 'digital'].includes(method))) fail('invalid-argument', 'Choose valid payment methods.')
+  }
+
+  const id = name === 'settings' ? 'profile' : data.id ? safeId(data.id, 'Record ID') : null
+  const reference = subcollection(actor.restaurantId, name).doc(id || undefined)
+  await db.runTransaction(async (transaction) => {
+    const current = id ? await transaction.get(reference) : null
+    if (id && !current.exists) fail('not-found', 'The record no longer exists.')
+    const record = { ...values, updatedAt: timestamp() }
+    if (!current?.exists) {
+      if (name === 'tables') Object.assign(record, { status: 'available', currentOrderId: null })
+      if (name === 'inventory') record.quantityOnHand = 0
+      if (name === 'customers') Object.assign(record, { visitCount: 0, totalSpendingCents: 0 })
+      record.createdAt = timestamp()
+      transaction.create(reference, record)
+    } else {
+      transaction.update(reference, record)
+    }
+  })
+  return { id: reference.id }
+}))
+
+export const removeRecord = onCall(options, (request) => withActor(request, async (actor, data) => {
+  const name = requiredString(data.collection, 'Collection', 64)
+  const id = safeId(data.id, 'Record ID')
+  if (data.restaurantId !== actor.restaurantId) fail('permission-denied', 'You cannot edit another restaurant.')
+  const removeRoles = {
+    categories: ['owner', 'manager'], menuItems: ['owner', 'manager'], waiters: ['owner', 'manager'],
+    tables: ['owner', 'manager'], customers: ['owner', 'manager'], suppliers: ['owner', 'manager'],
+    inventory: ['owner', 'manager'], staffInvitations: ['owner'],
+  }[name]
+  if (!removeRoles) fail('permission-denied', 'This record cannot be deleted.')
+  requireRole(actor, removeRoles)
+  const reference = subcollection(actor.restaurantId, name).doc(id)
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference)
+    if (!snapshot.exists) fail('not-found', 'The record no longer exists.')
+    if (name === 'inventory' && Number(snapshot.get('quantityOnHand') || 0) !== 0) fail('failed-precondition', 'Only zero-balance stock items can be deleted.')
+    if (name === 'staffInvitations' && (snapshot.get('status') !== 'open' || snapshot.get('active') !== true)) fail('failed-precondition', 'Only open invitations can be deleted.')
+    transaction.delete(reference)
+  })
+  return { ok: true }
+}))
+
+export const getStaffInvitation = onCall(options, async (request) => {
+  const restaurantId = safeId(request.data?.restaurantId, 'Restaurant')
+  const invitationId = safeId(request.data?.invitationId, 'Invitation')
+  const invitation = await subcollection(restaurantId, 'staffInvitations').doc(invitationId).get()
+  if (!invitation.exists) fail('not-found', 'This invitation link is invalid or has expired.')
+  const data = invitation.data()
+  if (data.active !== true || data.status !== 'open' || new Date(data.expiresAt).getTime() <= Date.now()) fail('failed-precondition', 'This invitation link is no longer active.')
+  return { ...data, id: invitation.id }
+})
+
+export const completeStaffInvite = onCall(options, async (request) => {
+  if (!request.auth?.uid) fail('unauthenticated', 'Sign in to join the restaurant team.')
+  const restaurantId = safeId(request.data?.restaurantId, 'Restaurant')
+  const invitationId = safeId(request.data?.invitationId, 'Invitation')
+  const account = await auth.getUser(request.auth.uid)
+  if (account.disabled) fail('permission-denied', 'This account is disabled.')
+  const email = String(request.auth.token.email || account.email || '').trim().toLowerCase()
+  const invitationRef = subcollection(restaurantId, 'staffInvitations').doc(invitationId)
+  const memberRef = subcollection(restaurantId, 'users').doc(account.uid)
+  const accountRef = db.doc(`accountMemberships/${account.uid}`)
+  const role = await db.runTransaction(async (transaction) => {
+    const [invitation, member, existingAccount] = await transaction.getAll(invitationRef, memberRef, accountRef)
+    if (!invitation.exists || invitation.get('active') !== true || invitation.get('status') !== 'open' || new Date(invitation.get('expiresAt')).getTime() <= Date.now()) fail('failed-precondition', 'This invitation link is no longer active.')
+    if (email !== String(invitation.get('email') || '').toLowerCase()) fail('permission-denied', `Sign in with ${invitation.get('email')} to accept this invitation.`)
+    if (!roles.has(invitation.get('role')) || invitation.get('role') === 'owner') fail('failed-precondition', 'This invitation has an invalid role.')
+    if (member.exists && (String(member.get('email') || '').toLowerCase() !== email || member.get('role') === 'owner')) {
+      fail('already-exists', 'This account is already assigned to a restaurant.')
+    }
+    if (existingAccount.exists && existingAccount.get('restaurantId') !== restaurantId) {
+      fail('already-exists', 'This account is already assigned to another restaurant.')
+    }
+    const memberRole = invitation.get('role')
+    const createdAt = timestamp()
+    const memberData = { email, displayName: account.displayName || invitation.get('displayName'), role: memberRole, active: true, permissions: member.get('permissions') || [], invitationId, updatedAt: createdAt, createdBy: invitation.get('createdBy') }
+    if (member.exists) transaction.update(memberRef, memberData)
+    else transaction.create(memberRef, { ...memberData, createdAt })
+    if (existingAccount.exists) transaction.update(accountRef, { restaurantId, role: memberRole, active: true, invitationId, updatedAt: createdAt })
+    else transaction.create(accountRef, { restaurantId, role: memberRole, active: true, invitationId, createdAt })
+    transaction.update(invitationRef, { status: 'claimed', claimedBy: account.uid, claimedAt: createdAt, updatedAt: createdAt })
+    transaction.create(auditRef(restaurantId), { action: 'staff.invitation_accepted', entityId: account.uid, actorId: account.uid, createdAt })
+    return memberRole
+  })
+  await auth.setCustomUserClaims(account.uid, { ...(account.customClaims || {}), restaurantId, role })
+  return { restaurantId, role }
+})
+
+export const deleteStaffMember = onCall(options, (request) => withActor(request, async (actor, data) => {
+  requireRole(actor, ['owner'])
+  const userId = safeId(data.userId, 'Team member')
+  if (userId === actor.uid) fail('failed-precondition', 'You cannot remove your own account.')
+  const memberRef = subcollection(actor.restaurantId, 'users').doc(userId)
+  await db.runTransaction(async (transaction) => {
+    const member = await transaction.get(memberRef)
+    if (!member.exists || member.get('role') === 'owner') fail('not-found', 'That team member cannot be removed here.')
+    transaction.update(memberRef, { active: false, removedAt: timestamp(), updatedAt: timestamp() })
+    transaction.create(auditRef(actor.restaurantId), { action: 'staff.member_removed', entityId: userId, actorId: actor.uid, createdAt: timestamp() })
+  })
+  await auth.updateUser(userId, { disabled: true }).catch(() => {})
+  await auth.revokeRefreshTokens(userId).catch(() => {})
+  return { userId, deleted: true }
+}))
+
+const syncWritableRoles = {
+  settings: ['owner'], categories: ['owner', 'manager'], menuItems: ['owner', 'manager'], waiters: ['owner', 'manager'],
+  tables: ['owner', 'manager'], reservations: canCreateOrders, orders: canCreateOrders, draftOrders: canCreateOrders,
+  orderFinancials: canReadFinance, payments: canReadFinance, customers: canReadFinance, inventory: ['owner', 'manager'],
+  stockMovements: ['owner', 'manager'], suppliers: ['owner', 'manager'], purchases: ['owner', 'manager'], expenses: ['owner', 'manager'],
+}
+const syncWritableFields = {
+  settings: ['name', 'currency', 'taxRate', 'paymentMethods', 'updatedAt', 'createdAt'],
+  categories: ['name', 'createdAt', 'updatedAt', 'deletedAt'],
+  menuItems: ['name', 'description', 'categoryId', 'categoryName', 'priceCents', 'available', 'imageUrl', 'variants', 'addOns', 'recipe', 'createdAt', 'updatedAt', 'deletedAt'],
+  waiters: ['restaurantId', 'name', 'phone', 'status', 'createdBy', 'createdAt', 'updatedAt', 'deletedAt'],
+  tables: ['name', 'capacity', 'status', 'currentOrderId', 'currentReservationId', 'mergedInto', 'mergedTableIds', 'mergedTableNames', 'unmergedCapacity', 'updatedAt', 'createdAt'],
+  reservations: ['restaurantId', 'tableId', 'tableName', 'guestName', 'phone', 'covers', 'startsAt', 'endsAt', 'status', 'createdBy', 'createdAt', 'updatedAt', 'seatedBy', 'seatedAt', 'cancellationReason', 'cancelledBy'],
+  orders: ['restaurantId', 'orderNumber', 'type', 'tableId', 'tableName', 'covers', 'waiterId', 'waiterName', 'note', 'items', 'status', 'paymentStatus', 'createdBy', 'createdAt', 'updatedAt', 'cancellationReason', 'cancelledBy'],
+  draftOrders: ['restaurantId', 'createdBy', 'status', 'type', 'tableId', 'tableName', 'covers', 'customerId', 'waiterId', 'note', 'items', 'discountCents', 'createdAt', 'updatedAt'],
+  orderFinancials: ['restaurantId', 'orderId', 'customerId', 'items', 'subtotalCents', 'discountCents', 'taxCents', 'totalCents', 'paidCents', 'refundedCents', 'customerVisitCounted', 'status', 'paymentStatus', 'lastPaymentId', 'createdAt', 'updatedAt'],
+  payments: ['restaurantId', 'orderId', 'amountCents', 'method', 'kind', 'reference', 'reason', 'recordedBy', 'createdAt', 'updatedAt'],
+  customers: ['name', 'phone', 'email', 'visitCount', 'totalSpendingCents', 'lastVisitAt', 'createdAt', 'updatedAt', 'deletedAt'],
+  inventory: ['name', 'unit', 'quantityOnHand', 'reorderLevel', 'averageCostCents', 'lastMovementId', 'createdAt', 'updatedAt'],
+  stockMovements: ['restaurantId', 'ingredientId', 'itemName', 'unit', 'movementType', 'quantity', 'unitCostCents', 'reason', 'orderId', 'purchaseId', 'createdBy', 'recordedBy', 'createdAt', 'updatedAt'],
+  suppliers: ['name', 'contact', 'phone', 'email', 'createdAt', 'updatedAt', 'deletedAt'],
+  purchases: ['restaurantId', 'supplierId', 'supplierName', 'items', 'totalCents', 'reference', 'status', 'createdBy', 'createdAt', 'updatedAt', 'receivedBy', 'receivedAt', 'lastReceiptId'],
+  expenses: ['restaurantId', 'category', 'amountCents', 'date', 'method', 'description', 'createdBy', 'createdAt'],
+}
+const syncDateFields = new Set(['createdAt', 'updatedAt', 'startsAt', 'endsAt', 'receivedAt', 'seatedAt', 'lastVisitAt'])
+
+function normalizedSyncData(data) {
+  const result = { ...data }
+  for (const field of syncDateFields) {
+    if (typeof result[field] === 'string') {
+      const date = new Date(result[field])
+      if (!Number.isNaN(date.valueOf())) result[field] = date
+    }
+  }
+  return result
+}
+
+function authorizeSyncCollection(actor, collection, writing) {
+  const rolesForAccess = (writing ? syncWritableRoles : readableCollections)[collection]
+  if (!rolesForAccess) fail('invalid-argument', 'This collection is not available through desktop sync.')
+  if (!rolesForAccess.includes(actor.role) && !(collection === 'orderFinancials' && mayUsePermission(actor, 'voidOrders'))) {
+    fail('permission-denied', 'You do not have permission to sync this collection.')
+  }
+}
+
+function validateSyncedRecord(actor, collection, data, current, id) {
+  const allowed = syncWritableFields[collection]
+  if (!allowed || Object.keys(data).some((field) => !allowed.includes(field))) fail('invalid-argument', `The ${collection} record contains unsupported fields.`)
+  if (data.restaurantId && data.restaurantId !== actor.restaurantId) fail('permission-denied', 'A record belongs to another restaurant.')
+  const record = { ...(current || {}), ...data }
+  if (collection === 'settings') {
+    if (id !== 'profile' || !validSettings(record)) fail('invalid-argument', 'Restaurant settings are invalid.')
+  } else if (collection === 'menuItems') {
+    if (!validMenuItem(record)) fail('invalid-argument', 'The menu item is invalid.')
+  } else if (collection === 'waiters') {
+    if (!record.name || record.name.length > 120 || typeof record.phone !== 'string' || !['active', 'inactive'].includes(record.status)) fail('invalid-argument', 'The waiter record is invalid.')
+  } else if (collection === 'tables') {
+    if (!record.name || !Number.isInteger(record.capacity) || record.capacity < 1 || record.capacity > 100 || !['available', 'occupied', 'merged'].includes(record.status)) fail('invalid-argument', 'The table record is invalid.')
+  } else if (collection === 'orders') {
+    if (!Array.isArray(record.items) || record.items.length < 1 || record.items.length > 40 || !['dine-in', 'takeaway', 'delivery', 'direct-bill'].includes(record.type) || !['queued', 'preparing', 'ready', 'served', 'cancelled'].includes(record.status) || record.createdBy !== actor.uid || record.paymentStatus !== 'unpaid') fail('invalid-argument', 'The synced order is invalid.')
+    if (record.type === 'dine-in' && (!Number.isInteger(record.covers) || record.covers < 1 || record.covers > 40 || !record.tableId)) fail('invalid-argument', 'The dine-in order is invalid.')
+    if (record.type !== 'dine-in' && (record.tableId || record.tableName)) fail('invalid-argument', 'This order type cannot reserve a table.')
+    if (current && current.status !== record.status) {
+      const next = { queued: ['preparing', 'cancelled'], preparing: ['ready', 'cancelled'], ready: ['served', 'cancelled'], served: [], cancelled: [] }
+      if (!next[current.status]?.includes(record.status)) fail('failed-precondition', 'The order status transition is invalid.')
+    }
+  } else if (collection === 'orderFinancials') {
+    if (!Number.isSafeInteger(record.subtotalCents) || !Number.isSafeInteger(record.discountCents) || !Number.isSafeInteger(record.taxCents) || record.totalCents !== record.subtotalCents - record.discountCents + record.taxCents || !Number.isSafeInteger(record.paidCents) || !Number.isSafeInteger(record.refundedCents) || record.paidCents < 0 || record.refundedCents < 0 || record.paidCents > record.totalCents || record.refundedCents > record.paidCents) fail('invalid-argument', 'The order financial record is invalid.')
+    if (record.discountCents > 0 && !mayUsePermission(actor, 'discounts')) fail('permission-denied', 'You cannot sync discounted orders.')
+  } else if (collection === 'payments') {
+    if (!Number.isSafeInteger(record.amountCents) || record.amountCents < 1 || record.recordedBy !== actor.uid || !record.orderId || !['cash', 'card', 'digital', 'adjustment'].includes(record.method)) fail('invalid-argument', 'The payment record is invalid.')
+  } else if (collection === 'reservations') {
+    if (!record.guestName || record.guestName.length > 120 || !Number.isInteger(record.covers) || record.covers < 1 || record.covers > 40 || !['booked', 'seated', 'cancelled'].includes(record.status)) fail('invalid-argument', 'The reservation record is invalid.')
+  } else if (collection === 'draftOrders') {
+    if (!['draft', 'pending-payment'].includes(record.status) || !Array.isArray(record.items) || record.items.length > 40 || (!['owner', 'manager'].includes(actor.role) && record.createdBy !== actor.uid)) fail('invalid-argument', 'The saved order is invalid.')
+  } else if (collection === 'inventory') {
+    if (!record.name || !record.unit || !Number.isFinite(record.quantityOnHand) || record.quantityOnHand < 0 || !Number.isFinite(record.reorderLevel) || record.reorderLevel < 0) fail('invalid-argument', 'The inventory record is invalid.')
+  } else if (collection === 'customers') {
+    if (!record.name || record.name.length > 120) fail('invalid-argument', 'The customer record is invalid.')
+  }
+}
+
+export const syncMongo = onRequest({}, async (request, response) => {
+  if (request.method !== 'POST') return response.status(405).json({ message: 'Use POST for MongoDB sync.' })
+  try {
+    const token = String(request.get('authorization') || '').replace(/^Bearer\s+/i, '')
+    if (!token) return response.status(401).json({ message: 'Sign in to sync restaurant data.' })
+    const decoded = await auth.verifyIdToken(token)
+    const actor = await actorFor({ auth: { uid: decoded.uid, token: decoded } })
+    const body = request.body || {}
+    const restaurantId = safeId(body.restaurantId, 'Restaurant')
+    if (restaurantId !== actor.restaurantId) fail('permission-denied', 'You cannot sync another restaurant.')
+    const collection = requiredString(body.collection || body.writes?.[0]?.collection, 'Collection', 64)
+
+    if (body.action === 'read') {
+      authorizeSyncCollection(actor, collection, false)
+      const docId = safeId(body.docId, 'Record ID')
+      const snapshot = await subcollection(actor.restaurantId, collection).doc(docId).get()
+      if (!snapshot.exists) return response.json({ document: null })
+      if (collection === 'draftOrders' && !['owner', 'manager'].includes(actor.role) && snapshot.get('createdBy') !== actor.uid) fail('permission-denied', 'You cannot read another team member’s saved order.')
+      const data = snapshot.data()
+      return response.json({ document: { id: snapshot.id, data, updateTime: data.updatedAt instanceof Date ? data.updatedAt.toISOString() : data.updatedAt || null } })
+    }
+
+    if (body.action === 'queryUpdatedSince') {
+      authorizeSyncCollection(actor, collection, false)
+      let query = subcollection(actor.restaurantId, collection)
+      if (body.sinceIsoString) {
+        const since = new Date(body.sinceIsoString)
+        if (Number.isNaN(since.valueOf())) fail('invalid-argument', 'The sync cursor is invalid.')
+        query = query.where('updatedAt', '>=', since)
+      }
+      if (collection === 'draftOrders' && !['owner', 'manager'].includes(actor.role)) query = query.where('createdBy', '==', actor.uid)
+      const result = await query.orderBy('updatedAt', 'asc').limit(100).get()
+      return response.json({ documents: result.docs.map((entry) => ({ ...entry.data(), id: entry.id })) })
+    }
+
+    if (body.action === 'writeBatch') {
+      const writes = body.writes
+      if (!Array.isArray(writes) || writes.length < 1 || writes.length > 500) fail('invalid-argument', 'A sync batch must contain 1 to 500 records.')
+      for (const write of writes) {
+        if (write.restaurantId !== actor.restaurantId) fail('permission-denied', 'A sync record belongs to another restaurant.')
+        authorizeSyncCollection(actor, write.collection, true)
+        if (!write.data || typeof write.data !== 'object' || Array.isArray(write.data) || Buffer.byteLength(JSON.stringify(write.data)) > 64 * 1024) fail('invalid-argument', 'A sync record is invalid or too large.')
+      }
+      await db.runTransaction(async (transaction) => {
+        const prepared = []
+        for (const write of writes) {
+          const id = safeId(write.docId, 'Record ID')
+          const reference = subcollection(actor.restaurantId, write.collection).doc(id)
+          const current = await transaction.get(reference)
+          const data = normalizedSyncData(write.data)
+          validateSyncedRecord(actor, write.collection, data, current.exists ? current.data() : null, id)
+          if (write.collection === 'draftOrders' && current.exists && !['owner', 'manager'].includes(actor.role) && current.get('createdBy') !== actor.uid) fail('permission-denied', 'You cannot update another team member’s saved order.')
+          if (data.deletedAt) {
+            if (!current.exists) continue
+            transaction.delete(reference)
+          } else {
+            transaction.set(reference, { ...data, updatedAt: new Date() }, { merge: true })
+          }
+          prepared.push(reference)
+        }
+      })
+      return response.json({ ok: true, count: writes.length })
+    }
+
+    fail('invalid-argument', 'The MongoDB sync action is unknown.')
+  } catch (error) {
+    const statusByCode = { unauthenticated: 401, 'permission-denied': 403, 'invalid-argument': 400, 'not-found': 404, 'failed-precondition': 409, 'already-exists': 409 }
+    const status = statusByCode[error.code] || 500
+    if (status === 500) console.error('MongoDB sync failed', error)
+    return response.status(status).json({ message: status === 500 ? 'MongoDB sync failed. Please try again.' : error.message, error: { status: error.code || 'internal' } })
+  }
+})

@@ -1,7 +1,7 @@
 /**
  * syncIpc.cjs
  *
- * IPC handlers for synchronization between SQLite and Firebase.
+ * IPC handlers for synchronization between SQLite and the RestaurantOS API.
  * Exposes channels to check sync status, trigger sync, and supply credentials.
  */
 
@@ -32,17 +32,19 @@ function registerSyncIpc() {
     if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) {
       throw new Error('Invalid credentials payload')
     }
-    const { projectId, authToken, restaurantId, expiresAt } = credentials
-    if (typeof projectId !== 'string' || !/^[A-Za-z0-9-]{6,128}$/.test(projectId)) {
-      throw new Error('projectId is invalid.')
+    const { apiBaseUrl, authToken, restaurantId, expiresAt } = credentials
+    if (apiBaseUrl !== undefined) {
+      let parsedUrl
+      try { parsedUrl = new URL(apiBaseUrl) } catch { throw new Error('apiBaseUrl is invalid.') }
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error('apiBaseUrl must use HTTP or HTTPS.')
     }
-    if (typeof authToken !== 'string' || authToken.length < 100 || authToken.length > 8192 || !/^[A-Za-z0-9._-]+$/.test(authToken)) {
+    if (authToken !== null && (typeof authToken !== 'string' || authToken.length < 32 || authToken.length > 256 || !/^[A-Za-z0-9_-]+$/.test(authToken))) {
       throw new Error('authToken is invalid.')
     }
-    if (typeof restaurantId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(restaurantId)) {
+    if (restaurantId !== undefined && (typeof restaurantId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(restaurantId))) {
       throw new Error('restaurantId is invalid.')
     }
-    if (typeof expiresAt !== 'string' || expiresAt.length > 64 || !Number.isFinite(Date.parse(expiresAt))) {
+    if (expiresAt !== undefined && (typeof expiresAt !== 'string' || expiresAt.length > 64 || !Number.isFinite(Date.parse(expiresAt)))) {
       throw new Error('expiresAt is invalid.')
     }
     syncWorker.setCredentials(credentials)

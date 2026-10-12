@@ -22,6 +22,7 @@ function makeQueueItem(overrides = {}) {
     name: 'Drinks',
     createdAt: timestamp,
     updatedAt: timestamp,
+    ...overrides.payload,
   }
   mocks.db.prepare(`INSERT INTO sync_queue
     (id, restaurant_id, collection_name, record_id, action, payload_json, status,
@@ -101,6 +102,22 @@ describe('SyncWorker queue reliability', () => {
     expect(mocks.commitWrites.mock.calls[0][0].writes).toHaveLength(1)
     expect(mocks.db.prepare('SELECT status FROM sync_queue').get().status).toBe('synced')
     expect(mocks.db.prepare('SELECT synced FROM categories').get().synced).toBe(1)
+  })
+
+  it('coalesces repeated updates to one document into the newest cloud write', async () => {
+    makeQueueItem({ id: 'queue-old', payload: { name: 'Old name' } })
+    makeQueueItem({
+      id: 'queue-new',
+      payload: { name: 'Latest name', updatedAt: '2099-01-01T00:00:00.000Z' },
+    })
+
+    await worker.processQueue()
+
+    expect(mocks.readDoc).toHaveBeenCalledOnce()
+    expect(mocks.buildUpdateWrite).toHaveBeenCalledOnce()
+    expect(mocks.buildUpdateWrite.mock.calls[0][0].data.name).toBe('Latest name')
+    expect(mocks.commitWrites.mock.calls[0][0].writes).toHaveLength(1)
+    expect(mocks.db.prepare("SELECT COUNT(*) AS count FROM sync_queue WHERE status = 'synced'").get().count).toBe(2)
   })
 
   it('does not increment retry count for network failures and applies backoff', async () => {
@@ -197,6 +214,22 @@ describe('SyncWorker queue reliability', () => {
       status: 'failed',
       retryCount: 1,
       lastError: 'REJECTED 400: Document name "https://firestore.googleapis.com/v1/projects/p/databases/(default)/documents/restaurants/r/orders/o" lacks "projects" at index 0.',
+    })
+
+    worker.recoverStuckQueue()
+
+    expect(mocks.db.prepare('SELECT status, retry_count, last_error FROM sync_queue').get()).toEqual({
+      status: 'pending',
+      retry_count: 0,
+      last_error: null,
+    })
+  })
+
+  it('requeues rows rejected by the previous duplicate-write batch behavior', () => {
+    makeQueueItem({
+      status: 'failed',
+      retryCount: 1,
+      lastError: 'REJECTED 400: Cannot insert then insert an entity in the same request.',
     })
 
     worker.recoverStuckQueue()

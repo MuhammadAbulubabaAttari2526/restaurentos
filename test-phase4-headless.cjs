@@ -92,6 +92,10 @@ app.whenReady().then(async () => {
       { name: 'Table 8', capacity: 6, status: 'available' },
       'table_8'
     )
+    genericRepository.upsert(restId, 'settings', {
+      name: 'Test Restaurant',
+      taxRate: 0.15,
+    }, 'profile')
 
     // ─── T1: createOrder Operation ──────────────────────────────────────
     console.log('[Suite 1: Local createOrder Operation]')
@@ -109,7 +113,6 @@ app.whenReady().then(async () => {
             selectedAddOnIds: ['extra_raita'],
           },
         ],
-        taxRate: 15, // 15% tax
         discountType: 'fixed',
         discountValue: 10000, // 100 Rs discount
         dineInCoverCount: 3,

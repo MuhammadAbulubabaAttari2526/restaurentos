@@ -6,15 +6,16 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import { getApiBaseUrl } from '../services/apiClient.js'
 
 async function checkWebReachability() {
   if (!navigator.onLine) return false
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 3000)
   try {
-    await fetch('https://firestore.googleapis.com', {
+    const base = getApiBaseUrl()
+    await fetch(`${base}/api/health`, {
       method: 'HEAD',
-      mode: 'no-cors',
       cache: 'no-store',
       signal: controller.signal,
     })
@@ -23,7 +24,7 @@ async function checkWebReachability() {
     return false
   } finally {
     clearTimeout(timeout)
-  }
+}
 }
 
 export function useSync() {

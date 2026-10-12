@@ -1,116 +1,80 @@
 import { useEffect, useState } from 'react'
-import { onIdTokenChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
-import { doc, getDoc } from 'firebase/firestore'
-import { auth, db, firebaseConfigured } from '../lib/firebase.js'
+import { getApiBaseUrl, joinWithInvitation, loadAuthSession, loginWithPassword, logoutSession } from '../services/apiClient.js'
 import { activateDemoSession, clearDemoSession, demoMembership, demoUser, isDemoSession } from '../services/demoData.js'
 import AuthContext from './authContext.js'
-
-async function getMembership(nextUser, forceRefresh = false) {
-  const token = await nextUser.getIdTokenResult(forceRefresh)
-  let restaurantId = token.claims.restaurantId
-  let role = token.claims.role
-  if ((!restaurantId || !role) && db) {
-    const accountSnapshot = await getDoc(doc(db, 'accountMemberships', nextUser.uid))
-    if (accountSnapshot.exists() && accountSnapshot.data().active === true) {
-      restaurantId = accountSnapshot.data().restaurantId
-      role = accountSnapshot.data().role
-    }
-  }
-  if (!restaurantId || !['owner', 'manager', 'cashier', 'waiter'].includes(role) || !db) return null
-  const memberSnapshot = await getDoc(doc(db, 'restaurants', restaurantId, 'users', nextUser.uid))
-  if (!memberSnapshot.exists() || memberSnapshot.data().active !== true || memberSnapshot.data().role !== role) return null
-  return { restaurantId, role, permissions: memberSnapshot.data().permissions || [] }
-}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => isDemoSession() ? demoUser : null)
   const [membership, setMembership] = useState(() => isDemoSession() ? demoMembership : null)
-  const [loading, setLoading] = useState(() => firebaseConfigured && !isDemoSession())
+  const [loading, setLoading] = useState(() => !isDemoSession())
 
-  useEffect(() => {
-    if (isDemoSession()) return undefined
-    if (!auth || !db) return undefined
-    let activeUid = null
-    let activeMembership = null
-
-    async function updateSyncCredentials(nextUser, nextMembership, forceRefresh = false) {
-      if (!window.posApi?.sync || !nextMembership?.restaurantId) return
-      const token = await nextUser.getIdTokenResult(forceRefresh)
+  async function updateSyncCredentials(nextUser, nextMembership, expiresAt) {
+    if (!window.posApi?.sync) return
+    if (nextUser && nextMembership?.restaurantId) {
+      const { getSessionToken } = await import('../services/apiClient.js')
       await window.posApi.sync.setCredentials({
-        projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-        authToken: token.token,
-        expiresAt: token.expirationTime,
+        apiBaseUrl: getApiBaseUrl() || 'http://localhost:8787',
+        authToken: getSessionToken(),
+        expiresAt: expiresAt || new Date(Date.now() + 30 * 86400000).toISOString(),
         restaurantId: nextMembership.restaurantId,
       })
+    } else {
+      await window.posApi.sync.setCredentials({ authToken: null, apiBaseUrl: getApiBaseUrl() || 'http://localhost:8787' }).catch(() => {})
     }
+  }
 
-    const unsubscribe = onIdTokenChanged(auth, async (nextUser) => {
-      if (isDemoSession()) {
-        setUser(demoUser)
-        setMembership(demoMembership)
-        setLoading(false)
-        return
-      }
-      setLoading(true)
-      setUser(nextUser)
-      if (!nextUser) {
-        activeUid = null
-        activeMembership = null
-        setMembership(null)
-        setLoading(false)
-        return
-      }
-
-      if (activeUid === nextUser.uid && activeMembership) {
-        setMembership(activeMembership)
-        try {
-          await updateSyncCredentials(nextUser, activeMembership)
-        } catch {}
-        setLoading(false)
-        return
-      }
-
-      try {
-        const mem = await getMembership(nextUser)
-        activeUid = nextUser.uid
-        activeMembership = mem
-        setMembership(mem)
-        if (mem?.restaurantId) {
-          window.sessionStorage.setItem('activeRestaurantId', mem.restaurantId)
-          window.sessionStorage.setItem('activeUserId', nextUser.uid)
-          await updateSyncCredentials(nextUser, mem)
+  useEffect(() => {
+    if (isDemoSession()) {
+      setLoading(false)
+      return undefined
+    }
+    let active = true
+    loadAuthSession()
+      .then(async (session) => {
+        if (!active || !session) return
+        setUser(session.user)
+        setMembership(session.membership)
+        if (session.membership?.restaurantId) {
+          window.sessionStorage.setItem('activeRestaurantId', session.membership.restaurantId)
+          window.sessionStorage.setItem('activeUserId', session.user.uid)
+          await updateSyncCredentials(session.user, session.membership, session.expiresAt)
         }
-      } catch {
-        if (activeUid !== nextUser.uid) setMembership(null)
-      } finally {
-        setLoading(false)
-      }
-    })
-
-    const refreshInterval = setInterval(() => {
-      if (auth.currentUser && activeMembership) {
-        updateSyncCredentials(auth.currentUser, activeMembership, true).catch(() => {})
-      }
-    }, 45 * 60 * 1000)
-
-    return () => {
-      unsubscribe()
-      clearInterval(refreshInterval)
-    }
+      })
+      .catch(() => {
+        if (!active) return
+        setUser(null)
+        setMembership(null)
+      })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
   }, [])
 
   async function login(email, password) {
-    if (!auth) throw new Error('Firebase is not configured. Add the required values to .env.local.')
     clearDemoSession()
-    const result = await signInWithEmailAndPassword(auth, email, password)
-    const verifiedMembership = await getMembership(result.user, true)
-    if (!verifiedMembership && !result.user.emailVerified) {
-      await signOut(auth)
-      throw new Error('Verify your email before continuing.')
+    const session = await loginWithPassword(email, password)
+    setUser(session.user)
+    setMembership(session.membership)
+    if (session.membership?.restaurantId) {
+      window.sessionStorage.setItem('activeRestaurantId', session.membership.restaurantId)
+      window.sessionStorage.setItem('activeUserId', session.user.uid)
     }
-    setUser(result.user)
-    setMembership(verifiedMembership)
-    return result
+    await updateSyncCredentials(session.user, session.membership, session.expiresAt)
+    setLoading(false)
+    return session
+  }
+
+  async function joinInvitation(details) {
+    clearDemoSession()
+    const session = await joinWithInvitation(details)
+    setUser(session.user)
+    setMembership(session.membership)
+    if (session.membership?.restaurantId) {
+      window.sessionStorage.setItem('activeRestaurantId', session.membership.restaurantId)
+      window.sessionStorage.setItem('activeUserId', session.user.uid)
+    }
+    await updateSyncCredentials(session.user, session.membership, session.expiresAt)
+    setLoading(false)
+    return session
   }
 
   function enterDemo() {
@@ -120,29 +84,32 @@ export function AuthProvider({ children }) {
     setLoading(false)
   }
 
-  async function refreshMembership(nextUser = auth?.currentUser) {
+  async function refreshMembership() {
     if (isDemoSession()) return demoMembership
-    if (!nextUser) {
+    const session = await loadAuthSession()
+    if (!session) {
       setUser(null)
       setMembership(null)
       return null
     }
-    setUser(nextUser)
-    const nextMembership = await getMembership(nextUser, true)
-    setMembership(nextMembership)
-    return nextMembership
+    setUser(session.user)
+    setMembership(session.membership)
+    await updateSyncCredentials(session.user, session.membership, session.expiresAt)
+    return session.membership
   }
 
   async function logout() {
     clearDemoSession()
     window.sessionStorage.removeItem('activeUserId')
+    window.sessionStorage.removeItem('activeRestaurantId')
     setUser(null)
     setMembership(null)
-    if (auth) await signOut(auth)
+    await logoutSession()
+    await updateSyncCredentials(null, null)
   }
 
   return (
-    <AuthContext.Provider value={{ user, membership, loading, login, logout, refreshMembership, enterDemo }}>
+    <AuthContext.Provider value={{ user, membership, loading, login, joinInvitation, logout, refreshMembership, enterDemo }}>
       {children}
     </AuthContext.Provider>
   )

@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 // Renderer process has NO access to Node.js, filesystem, or DB directly.
 contextBridge.exposeInMainWorld('posApi', {
   isElectron: true,
+  openPosWindow: () => ipcRenderer.invoke('pos:open-window'),
 
   // System info
   system: {
@@ -41,6 +42,7 @@ contextBridge.exposeInMainWorld('posApi', {
   pos: {
     runOperation: (restaurantId, name, payload) =>
       ipcRenderer.invoke('pos:runOperation', restaurantId, name, payload),
+    openWindow: () => ipcRenderer.invoke('pos:open-window'),
   },
 
   // Thermal Printing (ESC/POS – receipt & KOT)
