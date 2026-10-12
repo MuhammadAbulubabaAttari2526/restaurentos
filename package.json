@@ -72,7 +72,10 @@
     "verify:sqlite": "node scripts/verify-sqlite-native.cjs",
     "test": "vitest run",
     "test:electron": "electron test-electron-headless.cjs",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "provision-owner": "node functions/scripts/provision-first-owner.js",
+    "set-password": "node functions/scripts/set-account-password.js",
+    "migrate:firestore": "node functions/scripts/migrate-firestore-to-mongo.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
