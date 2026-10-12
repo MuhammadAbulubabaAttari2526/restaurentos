@@ -147,6 +147,29 @@ function sendStaticFile(response, filePath) {
   createReadStream(filePath).pipe(response)
 }
 
+function resolvePath(request, url) {
+  const matchedHeader = request.headers?.['x-matched-path']
+  if (matchedHeader && !matchedHeader.includes('/api/index')) {
+    return matchedHeader.split('?')[0]
+  }
+
+  const queryMatch = request.query?.match
+  if (Array.isArray(queryMatch) && queryMatch.length > 0) {
+    return `/api/${queryMatch.join('/')}`
+  }
+  if (typeof queryMatch === 'string' && queryMatch.length > 0) {
+    return `/api/${queryMatch.replace(/^\/+/, '')}`
+  }
+
+  const matchParam = url.searchParams.getAll('match')
+  if (matchParam.length > 0) {
+    return `/api/${matchParam.join('/')}`
+  }
+
+  const raw = url.pathname || '/'
+  return raw.split('?')[0]
+}
+
 export async function handleRequest(request, response) {
   response.setHeader('access-control-allow-origin', process.env.CORS_ORIGIN || '*')
   response.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
@@ -157,8 +180,7 @@ export async function handleRequest(request, response) {
   }
 
   const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
-  const rawPath = request.headers['x-matched-path'] || url.pathname
-  const pathname = rawPath.split('?')[0]
+  const pathname = resolvePath(request, url)
 
   try {
     if (pathname === '/api/health' && ['GET', 'HEAD'].includes(request.method)) {
