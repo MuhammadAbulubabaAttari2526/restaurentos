@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: restaurantos-api
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: npm install && cd functions && npm install
+    startCommand: node server/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGODB_URI
+        sync: false   # Set this manually in Render dashboard (secret)
+      - key: MONGODB_DB
+        value: restaurantos
+      - key: CORS_ORIGIN
+        sync: false   # Set to your Vercel frontend URL e.g. https://restaurantos.vercel.app
