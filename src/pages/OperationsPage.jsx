@@ -676,28 +676,6 @@ function OrdersPage() {
 
   const transitionIntentIds = useRef({})
 
-  async function nextStatus(order) {
-    const next = { queued: 'preparing', preparing: 'ready', ready: 'served' }[order.status]
-    if (!next) return
-    const requestId = transitionIntentIds.current[order.id] || createStableIntentId(`transition-${order.id}`)
-    transitionIntentIds.current[order.id] = requestId
-    setBusyId(order.id)
-    try {
-      await transitionOrder({ orderId: order.id, to: next, requestId })
-      toast.success(`Order marked ${next}.`)
-      transitionIntentIds.current[order.id] = null
-      resetStableIntentId(`transition-${order.id}`)
-    } catch (error) { toast.error(friendlyError(error)) } finally { setBusyId('') }
-  }
-
-  function openOrderAction(order) {
-    if (['queued', 'preparing', 'ready'].includes(order.status)) {
-      nextStatus(order)
-      return
-    }
-    setDetailsOrder(order)
-  }
-
   async function cancelOrder(order) {
     const reason = window.prompt(`Reason for cancelling ${order.orderNumber || 'this order'}?`)
     if (!reason?.trim()) return
@@ -716,7 +694,7 @@ function OrdersPage() {
     <PageHeading eyebrow="SERVICE FLOOR" title="Orders" description="Track order progress and record payments." action={<div className="order-toolbar"><label className="search-field"><Search size={16} /><input aria-label="Search orders" placeholder="Search orders" value={search} onChange={(event) => setSearch(event.target.value)} /></label><div className="filter-menu-wrap" ref={filterMenuRef}><button type="button" className={`filter-trigger ${filterMenuOpen ? 'open' : ''}`} aria-label="Filter orders" aria-expanded={filterMenuOpen} onClick={() => setFilterMenuOpen((open) => !open)}><span>{visibleFilterLabel}</span></button>{filterMenuOpen && <div className="filter-popover" role="listbox" aria-label="Order filters">{filterOptions.map((option) => <button key={option.value} type="button" className={`filter-option ${filter === option.value ? 'selected' : ''}`} onClick={() => { setFilter(option.value); setFilterMenuOpen(false) }}>{option.label}</button>)}</div>}</div></div>} />
     <LimitNotices sources={[{ truncated: ordersTruncated, limit: ordersLimit, label: 'orders' }, { truncated: financialsTruncated, limit: financialsLimit, label: 'financial records' }]} />
     {error && <div className="inline-alert">{error}</div>}
-    <section className="panel records-panel">{loading ? <LoadingLines /> : visible.length ? <div className="table-scroll"><table><thead><tr><th>Order</th><th>Placed</th><th>Type / table</th><th>Waiter</th><th>Items</th>{canSeeFinancials && <><th>Payment</th><th>Total</th></>}<th>Next action</th></tr></thead><tbody>{visible.map((order) => <tr key={order.id}><td><strong>{order.orderNumber || `#${order.id.slice(0, 7)}`}</strong></td><td>{formatDate(order.createdAt)}</td><td>{order.type || 'dine-in'}{order.tableName ? ` · ${order.tableName}` : ''}</td><td>{order.waiterName || '—'}</td><td>{order.items?.reduce((sum, item) => sum + item.quantity, 0) || 0} items</td>{canSeeFinancials && <><td><button className={`payment-status ${order.paymentStatus === 'paid' ? 'paid' : ''}`} onClick={() => setPaymentOrder(order)}>{order.paymentStatus || 'unpaid'}{order.paymentStatus !== 'paid' && <CirclePlus size={14} />}</button></td><td>{money(order.totalCents)}</td></>}<td><div className="row-actions">{order.status && !['served', 'cancelled'].includes(order.status) && <><button className="button button-small" onClick={() => openOrderAction(order)} disabled={busyId === order.id}>{busyId === order.id ? 'Updating' : nextAction(order.status)}</button>{canVoidOrders && <button className="button button-small button-danger" onClick={() => cancelOrder(order)} disabled={busyId === order.id}>Cancel</button>}{canTransferTable && order.type === 'dine-in' && <button className="button button-small" onClick={() => setTransferTarget(order)}>Transfer table</button>}</>}{canSeeFinancials && <button className="icon-button" title="Print receipt" aria-label="Print receipt" onClick={() => setReceipt(order)}><Printer size={16} /></button>}</div></td></tr>)}</tbody></table></div> : <EmptyState title="No orders in this view" detail="New POS orders will appear here as soon as they are sent." />}</section>
+    <section className="panel records-panel">{loading ? <LoadingLines /> : visible.length ? <div className="table-scroll"><table><thead><tr><th>Order</th><th>Placed</th><th>Type / table</th><th>Waiter</th><th>Items</th>{canSeeFinancials && <><th>Payment</th><th>Total</th></>}<th>Action</th></tr></thead><tbody>{visible.map((order) => <tr key={order.id}><td><strong>{order.orderNumber || `#${order.id.slice(0, 7)}`}</strong></td><td>{formatDate(order.createdAt)}</td><td>{order.type || 'dine-in'}{order.tableName ? ` · ${order.tableName}` : ''}</td><td>{order.waiterName || '—'}</td><td>{order.items?.reduce((sum, item) => sum + item.quantity, 0) || 0} items</td>{canSeeFinancials && <><td><button className={`payment-status ${order.paymentStatus === 'paid' ? 'paid' : ''}`} onClick={() => setPaymentOrder(order)}>{order.paymentStatus || 'unpaid'}{order.paymentStatus !== 'paid' && <CirclePlus size={14} />}</button></td><td>{money(order.totalCents)}</td></>}<td><div className="row-actions">{order.status && !['served', 'cancelled'].includes(order.status) && <>{canVoidOrders && ['queued', 'preparing'].includes(order.status) && <button className="button button-small button-danger" onClick={() => cancelOrder(order)} disabled={busyId === order.id}>{busyId === order.id ? 'Cancelling' : 'Cancel'}</button>}{canTransferTable && order.type === 'dine-in' && <button className="button button-small" onClick={() => setTransferTarget(order)}>Transfer table</button>}</>}{canSeeFinancials && <button className="icon-button" title="Print receipt" aria-label="Print receipt" onClick={() => setReceipt(order)}><Printer size={16} /></button>}</div></td></tr>)}</tbody></table></div> : <EmptyState title="No orders in this view" detail="New POS orders will appear here as soon as they are sent." />}</section>
     {detailsOrder && <OrderDetailsDialog order={detailsOrder} canSeeFinancials={canSeeFinancials} onClose={() => setDetailsOrder(null)} />}
     {paymentOrder && <PaymentDialog order={paymentOrder} onClose={() => setPaymentOrder(null)} />}
     {receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} onClose={() => setReceipt(null)} />}
@@ -855,10 +833,6 @@ function localDateKey(value) {
   const date = value?.toDate ? value.toDate() : value ? new Date(value) : null
   if (!date || Number.isNaN(date.valueOf())) return ''
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-
-function nextAction(status) {
-  return { queued: 'Start', preparing: 'Mark ready', ready: 'Served' }[status] || 'Open'
 }
 
 export function OperationsPage() {

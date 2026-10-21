@@ -146,15 +146,6 @@ async function downloadUpdateNow() {
   }
 }
 
-function countOpenOrders(db) {
-  return db.prepare(`
-    SELECT COUNT(*) AS count
-    FROM orders
-    WHERE status IN ('queued', 'preparing', 'ready')
-      OR (status = 'served' AND payment_status IN ('unpaid', 'partially_paid'))
-  `).get()?.count || 0
-}
-
 function verifyDatabase(db) {
   const result = db.prepare('PRAGMA quick_check').all()
   return result.length === 1 && result[0].quick_check === 'ok'
@@ -168,7 +159,7 @@ function countDurableQueuedChanges(db) {
   return result?.count || 0
 }
 
-/** Installs only from an explicit button, with order and SQLite safety checks. */
+/** Installs only from an explicit button, with in-flight operation and SQLite safety checks. */
 async function installUpdateNow() {
   if (_updateState.status !== 'downloaded') {
     return { success: false, error: 'No downloaded update is ready to install.' }
@@ -178,9 +169,6 @@ async function installUpdateNow() {
   }
 
   const db = getDb()
-  if (countOpenOrders(db) > 0) {
-    return { success: false, error: 'Finish active orders and payments before restarting to install the update.' }
-  }
 
   // Try to sync first. If the connection is offline or Firebase rejects a row,
   // the durable queue and all POS records remain in SQLite and are backed up.
@@ -210,9 +198,6 @@ async function installUpdateNow() {
   // new order, payment, or print operation can start before the restart.
   if (hasActiveOperations()) {
     return { success: false, error: 'Finish the active order, payment, or print before restarting.' }
-  }
-  if (countOpenOrders(db) > 0) {
-    return { success: false, error: 'Finish active orders and payments before restarting to install the update.' }
   }
   if (!beginUpdateInstall()) {
     return { success: false, error: 'Finish the active order, payment, or print before restarting.' }

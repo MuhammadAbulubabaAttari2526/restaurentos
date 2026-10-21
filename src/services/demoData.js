@@ -395,7 +395,7 @@ export async function runDemoOperation(name, payload = {}) {
       if (demoRecords.operationKeys.some((entry) => entry.id === operationId)) return { orderId: order.id, duplicate: true }
       const legal = { queued: ['preparing', 'cancelled'], preparing: ['ready', 'cancelled'], ready: ['served'] }
       if (!legal[order.status]?.includes(payload.to)) throw new Error(`An order cannot move from ${order.status} to ${payload.to}.`)
-      if (payload.to === 'cancelled' && financialFor(order.id).paidCents > 0) throw new Error('Refund the demo payment before cancelling this order.')
+      if (payload.to === 'cancelled' && financialFor(order.id).paidCents > financialFor(order.id).refundedCents) throw new Error('Fully refund the demo payment before cancelling this order.')
       if (payload.to === 'cancelled') {
         const menu = new Map(demoRecords.menuItems.map((item) => [item.id, item]))
         const needs = calculateRecipeNeeds(order.items, menu)

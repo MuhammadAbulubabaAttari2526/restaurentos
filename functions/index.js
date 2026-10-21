@@ -643,7 +643,7 @@ export const transitionOrder = onCall(options, (request) => withActor(request, a
     if (to === 'cancelled') {
       if (!mayUsePermission(actor, 'voidOrders')) fail('permission-denied', 'Cancelling an order requires explicit permission.')
       requiredString(data.reason, 'Cancellation reason', 300)
-      if ((financial.paidCents || 0) > 0) fail('failed-precondition', 'Record a refund before cancelling a paid order.')
+      if ((financial.paidCents || 0) > (financial.refundedCents || 0)) fail('failed-precondition', 'Fully refund the paid amount before cancelling this order.')
       transaction.update(financeRef, { status: 'cancelled', updatedAt: timestamp() })
     }
     const nextStatus = to
