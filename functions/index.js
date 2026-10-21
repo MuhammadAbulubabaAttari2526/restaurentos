@@ -1259,6 +1259,13 @@ export const removeRecord = onCall(options, (request) => withActor(request, asyn
     if (!snapshot.exists) fail('not-found', 'The record no longer exists.')
     if (name === 'inventory' && Number(snapshot.get('quantityOnHand') || 0) !== 0) fail('failed-precondition', 'Only zero-balance stock items can be deleted.')
     if (name === 'staffInvitations' && (snapshot.get('status') !== 'open' || snapshot.get('active') !== true)) fail('failed-precondition', 'Only open invitations can be deleted.')
+    if (name === 'categories') {
+      const itemById = await transaction.get(subcollection(actor.restaurantId, 'menuItems').where('categoryId', '==', id).limit(1))
+      const itemByName = itemById.empty
+        ? await transaction.get(subcollection(actor.restaurantId, 'menuItems').where('categoryName', '==', snapshot.get('name')).limit(1))
+        : itemById
+      if (!itemByName.empty) fail('failed-precondition', 'Move menu items to another category before deleting this category.')
+    }
     transaction.delete(reference)
   })
   return { ok: true }

@@ -4,8 +4,9 @@ import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  ArrowDownLeft, ArrowUpRight, Banknote, CalendarDays, Check, CirclePlus,
-  Clock3, CreditCard, Minus, Plus, Printer, Search, Settings, ShoppingBag,
+  ArrowDownLeft, ArrowUpRight, Banknote, CalendarDays, Check, ChevronLeft,
+  ChevronRight, CirclePlus, CreditCard, Ellipsis, Grid2x2, List, Minus,
+  Pencil, Plus, Printer, RefreshCw, Scale, Search, Settings, ShoppingBag, Tag,
   Trash2, Truck, Utensils, Users, Wallet, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -20,6 +21,7 @@ import { getPosDraftKey, readPosDraft, writePosDraft } from '../utils/posDraftSt
 import { normalizeMenuImageUrl, optimizeMenuImageUrl } from '../utils/menuImage.js'
 import { createStableIntentId, resetStableIntentId } from '../utils/idUtils.js'
 import { mergeOrderWithFinancials } from '../utils/orderMerge.js'
+import { publicAssetUrl } from '../utils/publicAssetUrl.js'
 import './operations.css'
 
 const currency = normalizeCurrency(import.meta.env.VITE_CURRENCY || 'PKR')
@@ -30,7 +32,7 @@ function PageHeading({ eyebrow, title, description, action }) {
   return <div className="page-heading"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1>{description && <p className="page-description">{description}</p>}</div>{action}</div>
 }
 
-function useRecords(name, max = 150, enabled = true) {
+function useRecords(name, max = 150, enabled = true, refreshToken = 0) {
   const { membership, user } = useAuth()
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(true)
@@ -38,6 +40,8 @@ function useRecords(name, max = 150, enabled = true) {
   useEffect(() => {
     if (!enabled) return undefined
     if (!membership?.restaurantId) return undefined
+    setLoading(true)
+    setError('')
     const filters = name === 'draftOrders' ? [['createdBy', '==', user.uid]] : []
     return watchRecords(membership.restaurantId, name, (next) => {
       setRecords(next)
@@ -47,7 +51,7 @@ function useRecords(name, max = 150, enabled = true) {
       setError(friendlyError(problem))
       setLoading(false)
     }, max, filters)
-  }, [membership?.restaurantId, membership?.role, user?.uid, name, max, enabled])
+  }, [membership?.restaurantId, membership?.role, user?.uid, name, max, enabled, refreshToken])
   return { records, setRecords, loading, error, truncated: records.length === max, limit: max }
 }
 
@@ -95,12 +99,39 @@ function StatTile({ label, value, note, icon: Icon, change }) {
 
 function Dashboard() {
   const { membership } = useAuth()
-  const { records: orders, loading: ordersLoading, truncated: ordersTruncated, limit: ordersLimit } = useRecords('orders', 500)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshToken, setRefreshToken] = useState(0)
+  const [lastUpdated, setLastUpdated] = useState(() => new Date())
+  const refreshTimer = useRef(null)
+  const refreshStartedAt = useRef(0)
+  const { records: orders, loading: ordersLoading, truncated: ordersTruncated, limit: ordersLimit } = useRecords('orders', 500, true, refreshToken)
   const canReadFinance = ['owner', 'manager'].includes(membership?.role)
-  const { records: financials, loading: financialsLoading, truncated: financialsTruncated, limit: financialsLimit } = useRecords('orderFinancials', 1000, canReadFinance)
-  const { records: inventory, truncated: inventoryTruncated, limit: inventoryLimit } = useRecords('inventory', 100)
-  const { records: expenses, truncated: expensesTruncated, limit: expensesLimit } = useRecords('expenses', 300, canReadFinance)
-  const { records: settings } = useRecords('settings', 1)
+  const { records: financials, loading: financialsLoading, truncated: financialsTruncated, limit: financialsLimit } = useRecords('orderFinancials', 1000, canReadFinance, refreshToken)
+  const { records: inventory, loading: inventoryLoading, truncated: inventoryTruncated, limit: inventoryLimit } = useRecords('inventory', 100, true, refreshToken)
+  const { records: expenses, loading: expensesLoading, truncated: expensesTruncated, limit: expensesLimit } = useRecords('expenses', 300, canReadFinance, refreshToken)
+  const { records: settings, loading: settingsLoading } = useRecords('settings', 1, true, refreshToken)
+
+  useEffect(() => () => window.clearTimeout(refreshTimer.current), [])
+
+  const refreshDataLoading = ordersLoading || inventoryLoading || settingsLoading
+    || (canReadFinance && (financialsLoading || expensesLoading))
+
+  useEffect(() => {
+    if (!refreshing || refreshDataLoading) return undefined
+    const remaining = Math.max(0, 650 - (Date.now() - refreshStartedAt.current))
+    refreshTimer.current = window.setTimeout(() => {
+      setLastUpdated(new Date())
+      setRefreshing(false)
+    }, remaining)
+    return () => window.clearTimeout(refreshTimer.current)
+  }, [refreshing, refreshDataLoading])
+
+  function refreshDashboard() {
+    if (refreshing) return
+    refreshStartedAt.current = Date.now()
+    setRefreshing(true)
+    setRefreshToken((token) => token + 1)
+  }
   const [today] = useState(() => new Date())
   const todayKey = localDateKey(today)
   const completedToday = financials.filter((record) => record.status === 'active' && ['paid', 'partially_refunded', 'refunded'].includes(record.paymentStatus) && localDateKey(record.createdAt) === todayKey)
@@ -133,7 +164,7 @@ function Dashboard() {
   const currencyCode = summary.currency
   const recentOrders = orders.map((order) => mergeOrderWithFinancials(order, financials.find((record) => record.id === order.id) || {}))
   return <>
-    <PageHeading eyebrow="RESTAURANT OPERATIONS" title="Good service starts here." description="Your restaurant at a glance. Figures update from confirmed records." action={<button className="button button-subtle" onClick={() => window.location.reload()}><Clock3 size={16} /> Refresh</button>} />
+    <PageHeading eyebrow="RESTAURANT OPERATIONS" title="Good service starts here." description="Your restaurant at a glance. Figures update from confirmed records." action={<div className="dashboard-refresh-action"><button className={`button button-subtle dashboard-refresh-button${refreshing ? ' is-refreshing' : ''}`} type="button" onClick={refreshDashboard} disabled={refreshing} aria-busy={refreshing}><RefreshCw size={16} aria-hidden="true" /><span>{refreshing ? 'Refreshing…' : 'Refresh'}</span></button><small>Last updated: {lastUpdated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small></div>} />
     <LimitNotices sources={[{ truncated: ordersTruncated, limit: ordersLimit, label: 'orders' }, { truncated: financialsTruncated, limit: financialsLimit, label: 'financial records' }, { truncated: inventoryTruncated, limit: inventoryLimit, label: 'inventory records' }, { truncated: expensesTruncated, limit: expensesLimit, label: 'expenses' }]} />
     {loading ? <div className="stats-grid"><LoadingLines count={4} /></div> : <div className="stats-grid">
       <StatTile label="Today's gross sales" value={formatMoney(summary.grossSalesCents, currencyCode)} note="Before refunds" icon={Banknote} />
@@ -154,6 +185,7 @@ function PosPage() {
   const { membership, user } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
+  const standalonePosWindow = location.pathname.replace(/\/+$/, '').toLowerCase() === '/pos-window'
   const draftStorageKey = getPosDraftKey(membership, user)
   const { records: items, loading: itemsLoading, truncated: itemsTruncated, limit: itemsLimit } = useRecords('menuItems')
   const { records: categories, truncated: categoriesTruncated, limit: categoriesLimit } = useRecords('categories')
@@ -229,7 +261,14 @@ function PosPage() {
   }, [restaurant])
   const selectedPaymentMethod = paymentMethods.includes(paymentMethod) ? paymentMethod : paymentMethods[0] || 'cash'
   const collectPaymentNow = canCollectPayment && paymentMethods.length > 0 && collectPayment
-  const visibleItems = useMemo(() => items.filter((item) => item.available !== false && (category === 'all' || item.categoryId === category) && item.name?.toLowerCase().includes(search.toLowerCase())), [items, category, search])
+  const visibleItems = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    return items.filter((item) => {
+      const categoryName = String(item.categoryName || categories.find((entry) => entry.id === item.categoryId)?.name || '').toLowerCase()
+      const matchesSearch = !query || item.name?.toLowerCase().includes(query) || categoryName.includes(query)
+      return item.available !== false && (category === 'all' || item.categoryId === category) && matchesSearch
+    })
+  }, [items, categories, category, search])
   const highlightedItem = visibleItems.find((entry) => entry.id === selectedMenuId) || visibleItems[0]
 
   useEffect(() => {
@@ -536,7 +575,15 @@ function PosPage() {
     }
   }
 
-  return <div className="pos-page pos-experience" onKeyDown={handlePosKeyDown}>
+  return <div className={`pos-page pos-experience${standalonePosWindow ? ' pos-standalone' : ''}`} onKeyDown={handlePosKeyDown}>
+    {standalonePosWindow && <header className="pos-storefront-header">
+      <div className="pos-storefront-brand">
+        <img src={publicAssetUrl('logo.jpg')} alt="" />
+        <span><strong>RestaurantOS</strong><small>Smart · Fast · Complete</small></span>
+      </div>
+      <label className="pos-search pos-storefront-search"><Search size={18} /><input ref={searchRef} aria-label="Search menu" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); addHighlightedItem() } }} placeholder="Search items, categories..." />{search && <button type="button" aria-label="Clear search" onClick={() => setSearch('')}><X size={16} /></button>}<kbd>Ctrl + K</kbd></label>
+      <span className="pos-storefront-status"><i /> {restaurant[0]?.name || 'RestaurantOS'}</span>
+    </header>}
     <header className="pos-hero">
       <div><div className="pos-kicker"><span className="pos-live-dot" /> FRONT OF HOUSE <span className="pos-kicker-divider">/</span> POINT OF SALE</div><h1 aria-label="Point of sale">Make it a good one.</h1><p>Build a ticket and create the order in one place.</p></div>
       <div className="pos-hero-meta"><span className="pos-live-pill"><span className="pos-live-dot" /> Menu synced</span><span className="pos-shortcut"><kbd>F2</kbd> Search <span>·</span> <kbd>Ctrl</kbd><kbd>↵</kbd> Place order</span></div>
@@ -545,15 +592,19 @@ function PosPage() {
 
     <div className={`pos-layout pos-workbench ${ticketOpen ? 'ticket-open' : ''}`}>
       <section className="menu-browser pos-menu-browser" aria-label="Menu catalog">
+        {standalonePosWindow && <section className="pos-menu-banner" aria-label="Welcome to the restaurant menu">
+          <div className="pos-menu-banner-copy"><span>WELCOME TO {restaurant[0]?.name || 'RESTAURANTOS'}</span><h2>Delicious food, happy moments</h2><p>Select items from the menu and add your order.</p></div>
+          <div className="pos-menu-banner-photo" aria-hidden="true">{visibleItems[0]?.imageUrl && <MenuImage url={visibleItems[0].imageUrl} name={visibleItems[0].name} />}</div>
+        </section>}
         <div className="pos-catalog-head"><div><p className="eyebrow">THE MENU</p><h2>Pick your items</h2><span>{visibleItems.length} available {visibleItems.length === 1 ? 'item' : 'items'}</span></div>
-          <label className="pos-search"><Search size={18} /><input ref={searchRef} aria-label="Search menu" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); addHighlightedItem() } }} placeholder="Search menu items…" />{search && <button type="button" aria-label="Clear search" onClick={() => setSearch('')}><X size={16} /></button>}<kbd>F2</kbd></label>
+          {!standalonePosWindow && <label className="pos-search"><Search size={18} /><input ref={searchRef} aria-label="Search menu" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); addHighlightedItem() } }} placeholder="Search menu items…" />{search && <button type="button" aria-label="Clear search" onClick={() => setSearch('')}><X size={16} /></button>}<kbd>F2</kbd></label>}
         </div>
-        <div className="pos-category-row" role="tablist" aria-label="Menu categories"><button type="button" role="tab" aria-selected={category === 'all'} className={category === 'all' ? 'is-active' : ''} onClick={() => setCategory('all')}>Everything</button>{categories.map((entry) => <button type="button" role="tab" aria-selected={category === entry.id} key={entry.id} className={category === entry.id ? 'is-active' : ''} onClick={() => setCategory(entry.id)}>{entry.name}</button>)}</div>
+        <div className="pos-category-row" role="tablist" aria-label="Menu categories"><button type="button" role="tab" aria-selected={category === 'all'} className={category === 'all' ? 'is-active' : ''} onClick={() => setCategory('all')}>{standalonePosWindow ? 'All' : 'Everything'}</button>{categories.map((entry) => <button type="button" role="tab" aria-selected={category === entry.id} key={entry.id} className={category === entry.id ? 'is-active' : ''} onClick={() => setCategory(entry.id)}>{entry.name}</button>)}</div>
         {itemsLoading ? <div className="pos-product-grid"><LoadingLines count={6} /></div> : visibleItems.length ? <div className="pos-product-grid">{visibleItems.map((item) => {
           const hasOptions = Boolean(item.itemType === 'weight-wise' || item.variants?.length || item.addOns?.length)
           const displayPrice = item.itemType === 'weight-wise' ? Math.min(...(item.weightOptions || []).map((option) => option.priceCents)) : item.priceCents
           return <button type="button" className="pos-product-card" key={item.id} onClick={() => hasOptions ? setOptionItem(item) : addToCart(item)} onMouseEnter={() => setSelectedMenuId(item.id)} aria-label={`${item.itemType === 'weight-wise' ? 'Choose weight for' : 'Add'} ${item.name}, ${money(displayPrice)}${hasOptions ? ', choose options' : ''}`} disabled={busy || Boolean(pendingPaymentOrder)}>
-            <span className="pos-product-photo"><MenuImage url={item.imageUrl} name={item.name} /><span className="pos-product-add"><Plus size={19} /></span>{hasOptions && <span className="pos-option-badge">Customize</span>}</span>
+            <span className="pos-product-photo"><MenuImage url={item.imageUrl} name={item.name} /><span className="pos-product-add"><Plus size={16} /><span>Add</span></span>{hasOptions && <span className="pos-option-badge">Customize</span>}</span>
             <span className="pos-product-info"><span className="pos-product-category">{item.categoryName || categories.find((entry) => entry.id === item.categoryId)?.name || 'Menu favorite'}</span><strong>{item.name}</strong><span className="pos-product-description">{item.description || (item.itemType === 'weight-wise' ? 'Choose a weight' : hasOptions ? 'Options available' : 'Made fresh to order')}</span><span className="pos-product-price">{item.itemType === 'weight-wise' ? 'From ' : ''}{money(displayPrice)}<span>{item.itemType === 'weight-wise' ? ' / weight' : ' / item'}</span></span></span>
           </button>
         })}</div> : <div className="pos-empty-catalog"><div className="pos-empty-icon"><Search size={21} /></div><strong>{search ? 'No matching dishes' : 'Nothing on this menu yet'}</strong><span>{search ? 'Try another name or choose a different category.' : 'Add available items in Menu management to start taking orders.'}</span>{search && <button type="button" className="button button-subtle" onClick={() => setSearch('')}>Clear search</button>}</div>}
@@ -879,7 +930,7 @@ function ResourcePage({ path }) {
 }
 
 function WaitersPage() {
-  const { membership, user } = useAuth()
+  const { membership } = useAuth()
   const { records, loading, error, truncated, limit } = useRecords('waiters')
   const [editing, setEditing] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -895,7 +946,6 @@ function WaitersPage() {
       if (!name || name.length > 120) throw new Error('Enter a waiter name up to 120 characters long.')
       if (phone.length > 40) throw new Error('Phone numbers can be up to 40 characters long.')
       const waiter = { ...values, name, phone, status: values.status || 'active' }
-      if (!editing?.id) waiter.createdBy = user.uid
       await saveRecord(membership.restaurantId, 'waiters', waiter, editing?.id)
       toast.success(editing?.id ? 'Waiter details saved.' : 'Waiter added.')
       setEditing(null)
@@ -1075,65 +1125,63 @@ function RecordWorkspace({ config }) {
   </>
 }
 
-function parseMenuOptions(value, priceField, previous) {
-  const lines = String(value || '').split('\n').map((line) => line.trim()).filter(Boolean)
-  if (lines.length > 20) throw new Error('A menu item can have up to 20 choices in each option group.')
-  const seenNames = new Set()
-  return lines.map((line) => {
-    const separator = line.lastIndexOf('|')
-    if (separator < 1) throw new Error('Enter each option as Name | price.')
-    const name = line.slice(0, separator).trim()
-    const price = Number(line.slice(separator + 1).trim())
-    const normalized = name.toLowerCase()
-    if (!name || name.length > 100 || seenNames.has(normalized) || !Number.isFinite(price)) {
-      throw new Error('Option names must be unique and each option needs a valid price.')
-    }
-    if (priceField === 'priceCents' && price < 0) throw new Error('Add-on prices cannot be negative.')
-    const cents = Math.round(price * 100)
-    if (!Number.isSafeInteger(cents) || Math.abs(cents) > 100000000) throw new Error('Option price is outside the allowed range.')
-    seenNames.add(normalized)
-    const previousOption = previous.find((option) => option.name.toLowerCase() === normalized)
-    return { id: previousOption?.id || crypto.randomUUID(), name, [priceField]: cents }
-  })
-}
-
-function formatMenuOptions(options = [], priceField) {
-  return options.map((option) => `${option.name} | ${(option[priceField] / 100).toFixed(2)}`).join('\n')
-}
-
-function parseRecipeText(value, inventory) {
-  const lines = String(value || '').split('\n').map((line) => line.trim()).filter(Boolean)
-  if (lines.length > 30) throw new Error('A recipe can contain up to 30 stock items.')
-  const seen = new Set()
-  return lines.map((line) => {
-    const separator = line.lastIndexOf('|')
-    if (separator < 1) throw new Error('Enter each recipe item as Stock item name | quantity.')
-    const name = line.slice(0, separator).trim().toLowerCase()
-    const quantity = Number(line.slice(separator + 1).trim())
-    const matching = inventory.filter((item) => item.name.trim().toLowerCase() === name)
-    if (!name || !Number.isFinite(quantity) || quantity <= 0 || quantity > 100000 || matching.length !== 1 || seen.has(matching[0]?.id)) {
-      throw new Error('Each recipe line must match one unique stock item and a positive quantity.')
-    }
-    seen.add(matching[0].id)
-    return { ingredientId: matching[0].id, quantity }
-  })
-}
-
-function formatRecipeText(recipe = [], inventory) {
-  return recipe.map((line) => {
-    const item = inventory.find((entry) => entry.id === line.ingredientId)
-    return item ? `${item.name} | ${line.quantity}` : ''
-  }).filter(Boolean).join('\n')
-}
-
 function MenuManagement() {
   const { membership } = useAuth()
-  const { records: items, loading, error, truncated: itemsTruncated, limit: itemsLimit } = useRecords('menuItems')
+  const { records: items, loading, error, truncated: itemsTruncated, limit: itemsLimit } = useRecords('menuItems', 500)
   const { records: categories, truncated: categoriesTruncated, limit: categoriesLimit } = useRecords('categories')
-  const { records: inventory, truncated: inventoryTruncated, limit: inventoryLimit } = useRecords('inventory')
+  const { truncated: inventoryTruncated, limit: inventoryLimit } = useRecords('inventory')
   const [editItem, setEditItem] = useState(null)
   const [categoryName, setCategoryName] = useState('')
+  const [selectedCategoryId, setSelectedCategoryId] = useState('all')
+  const [search, setSearch] = useState('')
+  const [availabilityFilter, setAvailabilityFilter] = useState('all')
+  const [viewMode, setViewMode] = useState('list')
+  const [page, setPage] = useState(1)
   const [busy, setBusy] = useState(false)
+  const [deletingCategoryId, setDeletingCategoryId] = useState('')
+  const [deletingItemId, setDeletingItemId] = useState('')
+  const menuSearchRef = useRef(null)
+  const itemsPerPage = 8
+
+  useEffect(() => {
+    function focusMenuSearch(event) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        menuSearchRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', focusMenuSearch)
+    return () => window.removeEventListener('keydown', focusMenuSearch)
+  }, [])
+
+  const filteredItems = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    return items.filter((item) => {
+      const itemCategory = categories.find((category) => category.id === item.categoryId)
+      const matchesSearch = !query || `${item.name || ''} ${item.description || ''} ${itemCategory?.name || item.categoryName || ''}`.toLowerCase().includes(query)
+      const matchesCategory = selectedCategoryId === 'all' || item.categoryId === selectedCategoryId
+      const matchesAvailability = availabilityFilter === 'all' || (availabilityFilter === 'available' ? item.available !== false : item.available === false)
+      return matchesSearch && matchesCategory && matchesAvailability
+    })
+  }, [items, categories, search, selectedCategoryId, availabilityFilter])
+  const pageCount = Math.max(1, Math.ceil(filteredItems.length / itemsPerPage))
+  const pageItems = filteredItems.slice((page - 1) * itemsPerPage, page * itemsPerPage)
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount))
+  }, [pageCount])
+
+  function openEditItem(item) {
+    setEditItem({ ...item, price: (item.priceCents / 100).toFixed(2), available: String(item.available !== false) })
+  }
+
+  function clearMenuFilters() {
+    setSearch('')
+    setSelectedCategoryId('all')
+    setAvailabilityFilter('all')
+    setPage(1)
+  }
+
   async function saveItem(values) {
     setBusy(true)
     try {
@@ -1171,9 +1219,9 @@ function MenuManagement() {
         weightOptions,
         available: String(values.available) !== 'false',
         imageUrl,
-        variants: itemType === 'weight-wise' ? [] : parseMenuOptions(values.variantsText, 'priceDeltaCents', editItem.variants || []),
-        addOns: parseMenuOptions(values.addOnsText, 'priceCents', editItem.addOns || []),
-        recipe: parseRecipeText(values.recipeText, inventory),
+        variants: itemType === 'weight-wise' ? [] : (editItem.variants || []),
+        addOns: editItem.addOns || [],
+        recipe: editItem.recipe || [],
       }
       await saveRecord(membership.restaurantId, 'menuItems', payload, editItem?.id)
       toast.success('Menu item saved.')
@@ -1186,15 +1234,95 @@ function MenuManagement() {
     if (!name) return
     try { await saveRecord(membership.restaurantId, 'categories', { name }, null); setCategoryName(''); toast.success('Category added.') } catch (problem) { toast.error(friendlyError(problem)) }
   }
+
+  async function deleteCategory(category) {
+    if (itemsTruncated) {
+      toast.error('The menu list is too large to safely check this category. Refresh the menu and try again.')
+      return
+    }
+    const assignedItems = items.filter((item) => item.categoryId === category.id || item.categoryName === category.name)
+    if (assignedItems.length) {
+      toast.error(`Move ${assignedItems.length} menu ${assignedItems.length === 1 ? 'item' : 'items'} to another category before deleting "${category.name}".`)
+      return
+    }
+    if (!window.confirm(`Delete the empty category "${category.name}"? This cannot be undone.`)) return
+    setDeletingCategoryId(category.id)
+    try {
+      await removeRecord(membership.restaurantId, 'categories', category.id)
+      if (selectedCategoryId === category.id) setSelectedCategoryId('all')
+      setPage(1)
+      toast.success('Category deleted.')
+    } catch (problem) { toast.error(friendlyError(problem)) } finally { setDeletingCategoryId('') }
+  }
   async function toggle(item) {
     try { await saveRecord(membership.restaurantId, 'menuItems', { available: item.available === false }, item.id); toast.success('Availability updated.') } catch (problem) { toast.error(friendlyError(problem)) }
   }
-  const fields = [{ name: 'name', label: 'Item name', required: true }, { name: 'itemType', label: 'Item type', type: 'select', options: [{ value: 'non-weight-wise', label: 'Non-Weight-Wise — per piece or serving' }, { value: 'weight-wise', label: 'Weight-Wise — choose a weight in POS' }] }, { name: 'price', label: 'Base price', type: 'number', required: true, min: 0.01, step: '0.01', showWhen: (values) => values.itemType !== 'weight-wise' }, { name: 'weightOptions', label: 'Weight options and prices', type: 'weightOptions', showWhen: (values) => values.itemType === 'weight-wise' }, { name: 'categoryId', label: 'Category', type: 'select', options: categories.map(({ id, name }) => ({ value: id, label: name })), required: true }, { name: 'description', label: 'Description' }, { name: 'variantsText', label: 'Variants (one per line: Name | price change)', type: 'textarea', placeholder: 'Large | 2.00\nSmall | -1.00', showWhen: (values) => values.itemType !== 'weight-wise' }, { name: 'addOnsText', label: 'Add-ons (one per line: Name | price)', type: 'textarea', placeholder: 'Extra cheese | 1.25\nAvocado | 2.00' }, { name: 'recipeText', label: 'Recipe (one per line: stock item name | quantity per serving)', type: 'textarea', placeholder: 'Tomatoes | 0.2\nOlive oil | 0.01' }, { name: 'available', label: 'Available to order', type: 'select', options: [{ value: 'true', label: 'Available' }, { value: 'false', label: 'Unavailable' }] }, { name: 'imageUrl', label: 'Public image URL (optional)', type: 'url', placeholder: 'https://example.com/menu-image.jpg' }]
-  return <><PageHeading eyebrow="MENU & CATALOG" title="Menu" description="Keep prices, availability and guest-facing details current." action={<button className="button button-primary" onClick={() => setEditItem({ available: true, itemType: 'non-weight-wise', weightOptions: [] })}><Plus size={16} /> Add menu item</button>} /><LimitNotices sources={[{ truncated: itemsTruncated, limit: itemsLimit, label: 'menu items' }, { truncated: categoriesTruncated, limit: categoriesLimit, label: 'categories' }, { truncated: inventoryTruncated, limit: inventoryLimit, label: 'inventory records' }]} />{error && <div className="inline-alert">{error}</div>}
-    <section className="panel category-strip"><div><p className="eyebrow">CATEGORIES</p><div className="category-chip-list">{categories.map((category) => <span className="category-chip" key={category.id}>{category.name}</span>)}{categories.length === 0 && <span className="muted-copy">Add categories before creating menu items.</span>}</div></div><form onSubmit={addCategory} className="add-category-form"><input aria-label="New category name" placeholder="Category name" value={categoryName} onChange={(event) => setCategoryName(event.target.value)} /><button className="button button-subtle" type="submit" disabled={!categoryName.trim()}><Plus size={15} /> Add</button></form></section>
-    <section className="panel records-panel">{loading ? <LoadingLines /> : items.length ? <div className="table-scroll"><table><thead><tr><th>Item</th><th>Category</th><th>Price</th><th>Options</th><th>Recipe</th><th>Availability</th><th /></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><div className="menu-table-name"><MenuImage url={item.imageUrl} name={item.name} /><div><strong>{item.name}</strong><small>{item.description || '—'}</small></div></div></td><td>{categories.find((category) => category.id === item.categoryId)?.name || 'Uncategorized'}</td><td>{money(item.priceCents)}</td><td>{(item.variants?.length || 0) + (item.addOns?.length || 0) || '—'}</td><td>{item.recipe?.length || '—'}</td><td><button className={`availability-button ${item.available === false ? 'unavailable' : ''}`} onClick={() => toggle(item)}>{item.available === false ? 'Unavailable' : 'Available'}</button></td><td><button className="button button-small" onClick={() => setEditItem({ ...item, price: (item.priceCents / 100).toFixed(2), available: String(item.available !== false), variantsText: formatMenuOptions(item.variants, 'priceDeltaCents'), addOnsText: formatMenuOptions(item.addOns, 'priceCents'), recipeText: formatRecipeText(item.recipe, inventory) })}>Edit</button></td></tr>)}</tbody></table></div> : <EmptyState title="Your menu starts here" detail="Create categories, then add items with verified prices." />}</section>
+  async function deleteMenuItem(item) {
+    if (!window.confirm(`Delete "${item.name}"? It will be removed from the POS menu.`)) return
+    setDeletingItemId(item.id)
+    try {
+      await removeRecord(membership.restaurantId, 'menuItems', item.id)
+      toast.success('Menu item deleted.')
+    } catch (problem) { toast.error(friendlyError(problem)) } finally { setDeletingItemId('') }
+  }
+  const fields = [{ name: 'name', label: 'Item name', required: true }, { name: 'itemType', label: 'Item type', type: 'select', options: [{ value: 'non-weight-wise', label: 'Non-Weight-Wise — per piece or serving' }, { value: 'weight-wise', label: 'Weight-Wise — choose a weight in POS' }] }, { name: 'price', label: 'Base price', type: 'number', required: true, min: 0.01, step: '0.01', showWhen: (values) => values.itemType !== 'weight-wise' }, { name: 'weightOptions', label: 'Weight options and prices', type: 'weightOptions', showWhen: (values) => values.itemType === 'weight-wise' }, { name: 'categoryId', label: 'Category', type: 'select', options: categories.map(({ id, name }) => ({ value: id, label: name })), required: true }, { name: 'description', label: 'Description' }, { name: 'available', label: 'Available to order', type: 'select', options: [{ value: 'true', label: 'Available' }, { value: 'false', label: 'Unavailable' }] }, { name: 'imageUrl', label: 'Public image URL (optional)', type: 'url', placeholder: 'https://example.com/menu-image.jpg' }]
+  return <div className="menu-management-page">
+    <PageHeading eyebrow="MENU & CATALOG" title="Menu" description="Manage dishes, pricing and availability." action={<button className="button button-primary menu-add-item" onClick={() => setEditItem({ available: true, itemType: 'non-weight-wise', weightOptions: [] })}><Plus size={19} /> Add menu item <ChevronRight size={17} /></button>} />
+    <LimitNotices sources={[{ truncated: itemsTruncated, limit: itemsLimit, label: 'menu items' }, { truncated: categoriesTruncated, limit: categoriesLimit, label: 'categories' }, { truncated: inventoryTruncated, limit: inventoryLimit, label: 'inventory records' }]} />
+    {error && <div className="inline-alert">{error}</div>}
+
+    <section className="panel menu-categories-panel" aria-label="Menu categories">
+      <div className="menu-categories-heading"><div><strong>Categories</strong><small>Organize your menu with categories.</small></div></div>
+      <div className="menu-category-chips">
+        <div className={`menu-category-entry menu-category-all ${selectedCategoryId === 'all' ? 'is-selected' : ''}`}>
+          <button type="button" className="menu-category-chip" aria-pressed={selectedCategoryId === 'all'} onClick={() => { setSelectedCategoryId('all'); setPage(1) }}><span>All Categories</span></button>
+        </div>
+        {categories.map((entry) => {
+          const selected = selectedCategoryId === entry.id
+          return <div className={`menu-category-entry ${selected ? 'is-selected' : ''}`} key={entry.id}>
+            <button type="button" className="menu-category-chip" aria-pressed={selected} onClick={() => { setSelectedCategoryId((current) => current === entry.id ? 'all' : entry.id); setPage(1) }}><span>{entry.name}</span></button>
+            <button type="button" className="menu-category-delete" aria-label={`Delete category ${entry.name}`} title={`Delete ${entry.name}`} disabled={deletingCategoryId === entry.id} onClick={() => deleteCategory(entry)}><Trash2 size={13} /></button>
+          </div>
+        })}
+        {!categories.length && <span className="menu-categories-empty">Add a category to start organizing menu items.</span>}
+      </div>
+      <form onSubmit={addCategory} className="menu-add-category-form"><label><input aria-label="New category name" placeholder="Add category..." value={categoryName} onChange={(event) => setCategoryName(event.target.value)} /></label><button className="button button-primary" type="submit" disabled={!categoryName.trim()}><Plus size={17} /> Add</button></form>
+    </section>
+
+    <section className="panel menu-admin-panel" aria-label="Menu items">
+      <div className="menu-admin-toolbar">
+        <label className="search-field menu-admin-search"><Search size={19} /><input ref={menuSearchRef} aria-label="Search menu items" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="Search menu items..." /><kbd>Ctrl + K</kbd></label>
+        <label className="menu-filter-select"><span className={`menu-filter-dot ${availabilityFilter === 'unavailable' ? 'is-off' : ''}`} /><select aria-label="Filter by availability" value={availabilityFilter} onChange={(event) => { setAvailabilityFilter(event.target.value); setPage(1) }}><option value="all">All Availability</option><option value="available">Available</option><option value="unavailable">Unavailable</option></select></label>
+        <div className="menu-view-toggle" role="group" aria-label="Menu item display mode"><button type="button" className={viewMode === 'grid' ? 'is-active' : ''} aria-pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')}><Grid2x2 size={16} /> Grid</button><button type="button" className={viewMode === 'list' ? 'is-active' : ''} aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')}><List size={16} /> List</button></div>
+      </div>
+
+      {loading ? <LoadingLines count={5} /> : pageItems.length ? viewMode === 'list' ? <div className="menu-admin-table-wrap"><table className="menu-admin-table"><thead><tr><th>Item</th><th>Category</th><th>Price</th><th>Pricing type</th><th>Availability</th><th>Actions</th></tr></thead><tbody>{pageItems.map((item) => {
+        const itemCategory = categories.find((entry) => entry.id === item.categoryId)?.name || item.categoryName || 'Uncategorized'
+        const weightWise = item.itemType === 'weight-wise'
+        const available = item.available !== false
+        return <tr key={item.id}>
+          <td><div className="menu-admin-item"><MenuImage url={item.imageUrl} name={item.name} /><span><strong>{item.name}</strong><small>{item.description || (weightWise ? 'Weight-based portions and pricing.' : 'Made fresh to order.')}</small></span></div></td>
+          <td><span className="menu-admin-category"><Tag size={14} />{itemCategory}</span></td>
+          <td><strong className="menu-admin-price">{weightWise ? 'From ' : ''}{money(item.priceCents)}</strong></td>
+          <td><span className="menu-pricing-type"><Scale size={15} />{weightWise ? 'By weight' : 'Per item'}</span></td>
+          <td><span className={`menu-availability ${available ? '' : 'is-unavailable'}`}><i />{available ? 'Available' : 'Unavailable'}</span></td>
+          <td><div className="menu-admin-actions"><button type="button" className="menu-icon-action" aria-label={`Edit ${item.name}`} title="Edit item" onClick={() => openEditItem(item)}><Pencil size={16} /></button><button type="button" className="menu-icon-action menu-delete-action" aria-label={`Delete ${item.name}`} title="Delete item" disabled={deletingItemId === item.id} onClick={() => deleteMenuItem(item)}><Trash2 size={15} /></button><details className="menu-row-more"><summary aria-label={`More actions for ${item.name}`} title="More actions"><Ellipsis size={18} /></summary><div><button type="button" onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); toggle(item) }}>{available ? 'Mark unavailable' : 'Make available'}</button></div></details></div></td>
+        </tr>
+      })}</tbody></table></div> : <div className="menu-admin-grid">{pageItems.map((item) => {
+        const itemCategory = categories.find((entry) => entry.id === item.categoryId)?.name || item.categoryName || 'Uncategorized'
+        const weightWise = item.itemType === 'weight-wise'
+        const available = item.available !== false
+        return <article className="menu-admin-card" key={item.id}>
+          <div className="menu-admin-card-photo"><MenuImage url={item.imageUrl} name={item.name} /><span className={`menu-availability ${available ? '' : 'is-unavailable'}`}><i />{available ? 'Available' : 'Unavailable'}</span></div>
+          <div className="menu-admin-card-content"><span className="menu-admin-category"><Tag size={13} />{itemCategory}</span><strong>{item.name}</strong><p>{item.description || (weightWise ? 'Weight-based portions and pricing.' : 'Made fresh to order.')}</p><div className="menu-admin-card-foot"><span><b>{weightWise ? 'From ' : ''}{money(item.priceCents)}</b><small><Scale size={13} />{weightWise ? 'By weight' : 'Per item'}</small></span><div className="menu-admin-actions"><button type="button" className="menu-icon-action" aria-label={`Edit ${item.name}`} title="Edit item" onClick={() => openEditItem(item)}><Pencil size={16} /></button><button type="button" className="menu-icon-action menu-delete-action" aria-label={`Delete ${item.name}`} title="Delete item" disabled={deletingItemId === item.id} onClick={() => deleteMenuItem(item)}><Trash2 size={15} /></button></div></div><button type="button" className="menu-card-availability-action" onClick={() => toggle(item)}>{available ? 'Mark unavailable' : 'Make available'}</button></div>
+        </article>
+      })}</div> : items.length ? <div className="menu-admin-empty"><strong>No menu items match these filters.</strong><span>Try another search or reset the category and availability filters.</span><button type="button" className="button button-subtle" onClick={clearMenuFilters}>Clear filters</button></div> : <EmptyState title="Your menu starts here" detail="Create categories, then add items with verified prices." />}
+
+      {!loading && filteredItems.length > 0 && <footer className="menu-admin-pagination"><span>Showing {((page - 1) * itemsPerPage) + 1}–{Math.min(page * itemsPerPage, filteredItems.length)} of {filteredItems.length} items</span><div><button type="button" aria-label="Previous page" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}><ChevronLeft size={17} /></button><span className="menu-page-number">{page}</span><button type="button" aria-label="Next page" disabled={page >= pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}><ChevronRight size={17} /></button></div></footer>}
+    </section>
+
     {editItem && <FormDialog title={editItem.id ? 'Edit menu item' : 'Add menu item'} fields={fields} initial={editItem} onClose={() => setEditItem(null)} onSubmit={saveItem} busy={busy} />}
-  </>
+  </div>
 }
 
 function InventoryPage() {

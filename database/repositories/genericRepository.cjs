@@ -40,6 +40,7 @@ const FIELD_MAP = {
   customerId:    'customer_id',
   tableId:       'table_id',
   categoryId:    'category_id',
+  categoryName:  'category_name',
   available:     'available',
   type:          'type',
   ingredientId:  'ingredient_id',

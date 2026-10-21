@@ -50,6 +50,12 @@ function registerDbIpc() {
     validateRestaurantId(restaurantId)
     validateCollection(collection)
     if (typeof id !== 'string' || !id) throw new Error('id is required.')
+    if (collection === 'categories') {
+      const category = getById(restaurantId, 'categories', id)
+      const hasAssignedItems = query(restaurantId, 'menuItems', [['categoryId', '==', id]], 1).length ||
+        (category?.name && query(restaurantId, 'menuItems', [['categoryName', '==', category.name]], 1).length)
+      if (hasAssignedItems) throw new Error('Move menu items to another category before deleting this category.')
+    }
     softDelete(restaurantId, collection, id)
   })
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, NavLink, useLocation } from 'react-router-dom'
 import {
   BarChart3, ClipboardList, CreditCard, LayoutDashboard,
@@ -46,8 +46,42 @@ export function AppLayout({ children }) {
   const menuButtonRef = useRef(null)
   const closeButtonRef = useRef(null)
   const sidebarRef = useRef(null)
+  const navRef = useRef(null)
   const pageContentRef = useRef(null)
+  const [navHighlight, setNavHighlight] = useState({ top: 0, height: 0, visible: false })
   const homePath = ['cashier', 'waiter'].includes(role) ? '/pos' : '/dashboard'
+
+  useLayoutEffect(() => {
+    const nav = navRef.current
+    if (!nav) return undefined
+
+    function positionHighlight() {
+      const activeLink = nav.querySelector('.nav-active')
+      if (!activeLink) {
+        setNavHighlight((current) => current.visible ? { ...current, visible: false } : current)
+        return
+      }
+
+      const navBounds = nav.getBoundingClientRect()
+      const linkBounds = activeLink.getBoundingClientRect()
+      setNavHighlight({
+        top: linkBounds.top - navBounds.top + nav.scrollTop,
+        height: linkBounds.height,
+        visible: true,
+      })
+    }
+
+    positionHighlight()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(positionHighlight)
+    observer?.observe(nav)
+    nav.addEventListener('scroll', positionHighlight)
+    window.addEventListener('resize', positionHighlight)
+    return () => {
+      observer?.disconnect()
+      nav.removeEventListener('scroll', positionHighlight)
+      window.removeEventListener('resize', positionHighlight)
+    }
+  }, [currentPath, role, visibleLinks.length])
 
   const syncStatusLabel = !syncState.isOnline
     ? 'Offline / آف لائن'
@@ -180,11 +214,11 @@ export function AppLayout({ children }) {
           <button ref={closeButtonRef} className="icon-button sidebar-close" aria-label="Close navigation" onClick={closeDrawer}><X size={19} /></button>
         </div>
         <div className="restaurant-picker">
-          <div className="restaurant-avatar">{(restaurantName || 'R').slice(0, 1).toUpperCase()}</div>
-          <div className="restaurant-label"><strong>{restaurantName || 'Restaurant'}</strong><span>{membership?.demo ? 'Sample workspace' : 'Restaurant workspace'}</span></div>
+          <div className="restaurant-picker-heading"><Store size={17} aria-hidden="true" /><span>{restaurantName || 'Restaurant Workspace'}</span></div>
         </div>
         <p className="nav-caption">WORKSPACE</p>
-        <nav className="main-nav" aria-label="Main navigation">
+        <nav ref={navRef} className="main-nav" aria-label="Main navigation">
+          <span className="nav-highlight" aria-hidden="true" style={{ top: `${navHighlight.top}px`, height: `${navHighlight.height}px`, opacity: navHighlight.visible ? 1 : 0 }} />
           {visibleLinks.map(({ label, path, icon: Icon }) => (
             <NavLink
               key={path}

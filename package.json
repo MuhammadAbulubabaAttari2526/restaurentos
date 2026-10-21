@@ -1,7 +1,7 @@
 {
   "name": "restaurantos",
   "productName": "RestaurantOS",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Enterprise Offline-First Windows Desktop POS for Restaurants",
   "author": "RestaurantOS",
   "private": true,

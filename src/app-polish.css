@@ -846,6 +846,216 @@ textarea {
   .app-frame .table-scroll tbody .row-actions { justify-content: flex-start; }
 }
 
+/* Deep green workspace sidebar styling. */
+.app-frame .sidebar {
+  width: 276px;
+  height: 100dvh;
+  padding: 15px 16px 16px;
+  color: #f2faf5;
+  background:
+    radial-gradient(ellipse at 4% 85%, #08724e42 0, transparent 32%),
+    linear-gradient(180deg, #04362a 0%, #032d23 56%, #02281f 100%);
+  border-right: 1px solid #ffffff12;
+  box-shadow: 12px 0 34px #0b271b24;
+}
+
+.app-frame .main-column { margin-left: 276px; }
+
+.app-frame .brand-lockup {
+  min-height: 54px;
+  margin-bottom: 16px;
+  padding: 2px 1px;
+}
+
+.app-frame .brand-home-link { gap: 11px; }
+
+.app-frame .brand-mark {
+  width: 42px;
+  height: 42px;
+  padding: 2px;
+  border: 1px solid #ffffffde;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 20px #001c1460;
+}
+
+.app-frame .brand-home-copy strong {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.app-frame .brand-home-copy span {
+  margin-top: 3px;
+  color: #d2e7db;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+}
+
+.app-frame .restaurant-picker {
+  display: flex;
+  min-height: 44px;
+  margin: 0 0 14px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #ffffff24;
+  border-radius: 12px;
+  background: #ffffff08;
+  box-shadow: 0 7px 18px #001d1530, inset 0 1px #ffffff0a;
+  backdrop-filter: blur(10px);
+}
+
+.app-frame .restaurant-picker-heading {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 11px;
+  color: #f2faf5;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.app-frame .restaurant-picker-heading > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-frame .restaurant-picker-heading svg {
+  width: 29px;
+  height: 29px;
+  flex: 0 0 29px;
+  padding: 6px;
+  border: 1px solid #53cb8c3b;
+  border-radius: 9px;
+  background: #0a704d5c;
+  color: #8ce6b4;
+}
+
+.app-frame .nav-caption { display: none; }
+
+.app-frame .main-nav {
+  position: relative;
+  gap: 3px;
+  padding-right: 0;
+  margin-right: 0;
+}
+
+.app-frame .nav-link {
+  position: relative;
+  z-index: 1;
+  min-height: 39px;
+  grid-template-columns: 19px minmax(0, 1fr);
+  column-gap: 10px;
+  padding: 0 10px;
+  border-radius: 9px;
+  color: #dcebe2;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.app-frame .nav-link svg { width: 18px; height: 18px; color: #e2f0e7; }
+
+.app-frame .nav-link:hover {
+  border-color: #ffffff13;
+  background: #ffffff10;
+  transform: translateX(2px);
+}
+
+.app-frame .nav-link.nav-active {
+  color: #fff;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 700;
+}
+
+.app-frame .nav-link.nav-active svg {
+  color: #fff;
+  filter: drop-shadow(0 1px 3px #003a2780);
+}
+
+.app-frame .nav-link.nav-active::before { content: none; }
+
+.app-frame .nav-highlight {
+  position: absolute;
+  z-index: 0;
+  right: 0;
+  left: 0;
+  border: 1px solid #5bd0ad80;
+  border-radius: 9px;
+  background: linear-gradient(105deg, #13816a 0%, #095b4b 100%);
+  box-shadow: inset 0 1px #ffffff28, 0 6px 16px #001c145e;
+  transition: top 280ms cubic-bezier(0.22, 0.75, 0.24, 1), height 180ms ease, opacity 100ms ease;
+  pointer-events: none;
+}
+
+.app-frame .nav-highlight::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 4px;
+  height: 22px;
+  border-radius: 0 4px 4px 0;
+  background: #7effd0;
+  box-shadow: 0 0 10px #66f0bc99;
+  content: '';
+  transform: translateY(-50%);
+}
+
+.app-frame .sidebar-bottom {
+  padding-top: 9px;
+  border-top-color: #ffffff24;
+}
+
+.app-frame .profile-row {
+  min-height: 46px;
+  gap: 9px;
+  padding: 4px 3px;
+}
+
+.app-frame .profile-row:hover { background: #ffffff0d; }
+
+.app-frame .profile-avatar {
+  width: 35px;
+  height: 35px;
+  border: 1px solid #ffffff9c;
+  border-radius: 50%;
+  color: #31573f;
+  background: #f5eecb;
+  font-size: 14px;
+}
+
+.app-frame .profile-details strong { color: #f6faf7; font-size: 11px; }
+.app-frame .profile-details span { color: #c8ded0; font-size: 9px; text-transform: capitalize; }
+.app-frame .profile-row > svg { color: #c3d9cb; }
+
+@media (max-width: 1120px) and (min-width: 821px) {
+  .app-frame .sidebar { width: 232px; padding-inline: 14px; }
+  .app-frame .main-column { margin-left: 232px; }
+  .app-frame .brand-home-copy strong { font-size: 17px; }
+  .app-frame .brand-home-copy span { font-size: 8px; letter-spacing: 0.8px; }
+}
+
+@media (max-width: 820px) {
+  .app-frame .sidebar { width: min(276px, 86vw); padding: 15px 16px 16px; }
+  .app-frame .main-column { margin-left: 0; }
+}
+
+@media (max-height: 680px) {
+  .app-frame .brand-lockup { margin-bottom: 11px; }
+  .app-frame .restaurant-picker { margin-bottom: 9px; }
+  .app-frame .nav-link { min-height: 36px; }
+}
+
 @media (max-width: 640px) {
   .app-frame .page-heading { flex-wrap: wrap; }
   .app-frame .page-heading > div:first-child { flex: 1 1 100%; }
