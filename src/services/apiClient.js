@@ -1,9 +1,12 @@
 const SESSION_KEY = 'restaurantos.session'
+const DEFAULT_DESKTOP_API_BASE_URL = 'https://restaurentos-rosy.vercel.app'
 
 export function getApiBaseUrl() {
   const configured = import.meta.env?.VITE_API_BASE_URL?.trim()
   if (configured) return configured.replace(/\/+$/, '')
-  if (typeof window !== 'undefined' && window.posApi?.isElectron && import.meta.env.DEV) return 'http://localhost:8787'
+  if (typeof window !== 'undefined' && window.posApi?.isElectron) {
+    return import.meta.env.DEV ? 'http://localhost:8787' : DEFAULT_DESKTOP_API_BASE_URL
+  }
   return ''
 }
 

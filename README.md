@@ -82,7 +82,7 @@ npm.cmd start
 
 The Node server serves the built web app and the MongoDB API on the same origin. Deploy that Node server to a host that can reach your Atlas cluster, provide `MONGODB_URI` and `MONGODB_DB` as server secrets, and allowlist the host's outbound IP in Atlas. The API uses `PORT` when provided by the host.
 
-For a packaged Electron app that connects to a remote Node API, set `VITE_API_BASE_URL` to the API origin before building. The value is public and contains no database credential. The desktop app keeps working offline and synchronizes when it can reach that server.
+For a packaged Electron app that connects to a remote Node API, set `VITE_API_BASE_URL` to the API origin before building to override the default RestaurantOS Vercel API. The value is public and contains no database credential. The desktop app keeps working offline and synchronizes when it can reach that server.
 
 ## Operational notes
 
