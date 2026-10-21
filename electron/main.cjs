@@ -110,6 +110,7 @@ function createPosWindow() {
     minWidth: 1040,
     minHeight: 720,
     title: 'RestaurantOS POS Window',
+    icon: path.join(appRoot, 'electron', 'assets', 'app-icon.png'),
     backgroundColor: '#0f172a',
     autoHideMenuBar: true,
     webPreferences: {
@@ -155,6 +156,7 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 700,
     title: 'RestaurantOS POS',
+    icon: path.join(appRoot, 'electron', 'assets', 'app-icon.png'),
     backgroundColor: '#0f172a',
     webPreferences: {
       preload: path.join(appRoot, 'electron', 'preload.cjs'),

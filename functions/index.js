@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { HttpsError, onCall, onRequest } from './httpCompat.js'
 import { getMongoAuth } from './mongoAuth.js'
 import { getFirestoreCompat, FieldValue, Timestamp } from './mongoFirestoreCompat.js'
-import { applyPayment, applyRefund, calculateRecipeNeeds, priceMenuLine } from './domain.js'
+import { applyPayment, applyRefund, calculateRecipeNeeds, normalizeWeightOptions, priceMenuLine } from './domain.js'
 
 const db = getFirestoreCompat()
 const auth = getMongoAuth()
@@ -34,7 +34,7 @@ const readableCollections = {
 }
 const editableCollections = {
   categories: { roles: ['owner', 'manager'], fields: ['name'] },
-  menuItems: { roles: ['owner', 'manager'], fields: ['name', 'description', 'categoryId', 'categoryName', 'priceCents', 'available', 'imageUrl', 'variants', 'addOns', 'recipe'] },
+  menuItems: { roles: ['owner', 'manager'], fields: ['name', 'description', 'categoryId', 'categoryName', 'priceCents', 'available', 'imageUrl', 'itemType', 'weightOptions', 'variants', 'addOns', 'recipe'] },
   waiters: { roles: ['owner', 'manager'], fields: ['name', 'phone', 'status'] },
   tables: { roles: ['owner', 'manager'], fields: ['name', 'capacity'] },
   customers: { roles: canReadFinance, fields: ['name', 'phone', 'email'] },
@@ -61,6 +61,31 @@ function safeId(value, name) {
 function validCents(value, name) {
   if (!Number.isSafeInteger(value) || value < 1 || value > 100000000) fail('invalid-argument', `${name} must be a positive amount.`)
   return value
+}
+
+function validMenuItem(record) {
+  if (!record || typeof record.name !== 'string' || !record.name.trim() || record.name.length > 120) return false
+  const itemType = record.itemType || 'non-weight-wise'
+  if (!['non-weight-wise', 'weight-wise'].includes(itemType)) return false
+  if (!Number.isSafeInteger(record.priceCents) || record.priceCents < 0 || record.priceCents > 100000000) return false
+  if (typeof record.available !== 'boolean') return false
+  if (record.description !== undefined && (typeof record.description !== 'string' || record.description.length > 500)) return false
+  if (record.categoryName !== undefined && (typeof record.categoryName !== 'string' || record.categoryName.length > 80)) return false
+  if (record.imageUrl !== undefined && (typeof record.imageUrl !== 'string' || record.imageUrl.length > 2048 || (record.imageUrl && !record.imageUrl.startsWith('https://')))) return false
+  const variants = record.variants === undefined ? [] : record.variants
+  const addOns = record.addOns === undefined ? [] : record.addOns
+  const recipe = record.recipe === undefined ? [] : record.recipe
+  if (!Array.isArray(variants) || !Array.isArray(addOns) || !Array.isArray(recipe)) return false
+  if (variants.length > 20 || addOns.length > 20 || recipe.length > 30) return false
+  if (variants.some((option) => !option || typeof option.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(option.id) || typeof option.name !== 'string' || !option.name.trim() || option.name.length > 100 || !Number.isSafeInteger(option.priceDeltaCents) || Math.abs(option.priceDeltaCents) > 100000000)) return false
+  if (addOns.some((option) => !option || typeof option.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(option.id) || typeof option.name !== 'string' || !option.name.trim() || option.name.length > 100 || !Number.isSafeInteger(option.priceCents) || option.priceCents < 0 || option.priceCents > 100000000)) return false
+  try {
+    const weights = normalizeWeightOptions(record.weightOptions || [])
+    if (itemType === 'weight-wise') return weights.length > 0 && variants.length === 0
+    return true
+  } catch {
+    return false
+  }
 }
 
 function auditRef(restaurantId) {
@@ -220,7 +245,7 @@ export const createOrder = onCall(options, (request) => withActor(request, async
     const sequence = (counterSnapshot.get('value') || 0) + 1
     const orderNumber = `R-${orderDay.replaceAll('-', '')}-${String(sequence).padStart(4, '0')}`
     const createdAt = timestamp()
-    const serviceLines = lines.map(({ itemId, name, quantity, note, selectedVariant, selectedAddOns }) => ({ itemId, name, quantity, note, selectedVariant, selectedAddOns: selectedAddOns.map(({ id, name: addOnName }) => ({ id, name: addOnName })) }))
+    const serviceLines = lines.map(({ itemId, name, quantity, note, unitPriceCents, lineTotalCents, selectedWeight, selectedVariant, selectedAddOns }) => ({ itemId, name, quantity, note, unitPriceCents, lineTotalCents, selectedWeight, selectedVariant, selectedAddOns: selectedAddOns.map(({ id, name: addOnName }) => ({ id, name: addOnName })) }))
     const order = {
       restaurantId: actor.restaurantId,
       orderNumber,
@@ -281,6 +306,7 @@ export const saveOrderDraft = onCall(options, (request) => withActor(request, as
       quantity: line.quantity,
       note: typeof line.note === 'string' ? line.note.trim().slice(0, 300) : '',
       selectedVariantId: line.selectedVariantId ? safeId(line.selectedVariantId, 'Variant') : null,
+      selectedWeightOptionId: line.selectedWeightOptionId ? safeId(line.selectedWeightOptionId, 'Weight option') : null,
       selectedAddOnIds: line.selectedAddOnIds || [],
     }
   })
@@ -1136,13 +1162,15 @@ export const saveRecord = onCall(options, (request) => withActor(request, async 
 
   if (name === 'categories') cleanText('name', 'Category name', 80, true)
   if (name === 'menuItems') {
-    cleanText('name', 'Menu item name', 120, true)
-    cleanText('description', 'Description', 500)
-    cleanText('categoryName', 'Category name', 80)
-    if (!Number.isSafeInteger(values.priceCents) || values.priceCents < 0 || values.priceCents > 100000000) fail('invalid-argument', 'Enter a valid item price.')
-    if (typeof values.available !== 'boolean') fail('invalid-argument', 'Choose whether this item is available.')
-    if (typeof values.imageUrl !== 'string' || values.imageUrl.length > 2048 || (values.imageUrl && !values.imageUrl.startsWith('https://'))) fail('invalid-argument', 'Enter a valid HTTPS image URL.')
-    for (const field of ['variants', 'addOns', 'recipe']) if (!Array.isArray(values[field]) || values[field].length > (field === 'recipe' ? 30 : 20)) fail('invalid-argument', `The ${field} list is invalid.`)
+    if (Object.hasOwn(values, 'name')) cleanText('name', 'Menu item name', 120, true)
+    if (Object.hasOwn(values, 'description')) cleanText('description', 'Description', 500)
+    if (Object.hasOwn(values, 'categoryName')) cleanText('categoryName', 'Category name', 80)
+    if (Object.hasOwn(values, 'priceCents') && (!Number.isSafeInteger(values.priceCents) || values.priceCents < 0 || values.priceCents > 100000000)) fail('invalid-argument', 'Enter a valid item price.')
+    if (Object.hasOwn(values, 'available') && typeof values.available !== 'boolean') fail('invalid-argument', 'Choose whether this item is available.')
+    if (Object.hasOwn(values, 'imageUrl') && (typeof values.imageUrl !== 'string' || values.imageUrl.length > 2048 || (values.imageUrl && !values.imageUrl.startsWith('https://')))) fail('invalid-argument', 'Enter a valid HTTPS image URL.')
+    for (const field of ['variants', 'addOns', 'recipe']) if (Object.hasOwn(values, field) && (!Array.isArray(values[field]) || values[field].length > (field === 'recipe' ? 30 : 20))) fail('invalid-argument', `The ${field} list is invalid.`)
+    if (Object.hasOwn(values, 'itemType') && !['non-weight-wise', 'weight-wise'].includes(values.itemType)) fail('invalid-argument', 'Choose a valid menu item type.')
+    if (Object.hasOwn(values, 'weightOptions') && !Array.isArray(values.weightOptions)) fail('invalid-argument', 'The weight options list is invalid.')
   }
   if (name === 'waiters') {
     cleanText('name', 'Waiter name', 120, true)
@@ -1187,6 +1215,20 @@ export const saveRecord = onCall(options, (request) => withActor(request, async 
     const current = id ? await transaction.get(reference) : null
     if (id && !current.exists) fail('not-found', 'The record no longer exists.')
     const record = { ...values, updatedAt: timestamp() }
+    if (name === 'menuItems') {
+      Object.assign(record, current?.data() || {}, values, { updatedAt: timestamp() })
+      if (!current?.exists) {
+        record.itemType ||= 'non-weight-wise'
+        record.weightOptions ||= []
+        record.variants ||= []
+        record.addOns ||= []
+        record.recipe ||= []
+        record.description ||= ''
+        record.categoryName ||= ''
+        record.imageUrl ||= ''
+      }
+      if (!validMenuItem(record)) fail('invalid-argument', 'The menu item or its weight options are invalid.')
+    }
     if (!current?.exists) {
       if (name === 'tables') Object.assign(record, { status: 'available', currentOrderId: null })
       if (name === 'inventory') record.quantityOnHand = 0
@@ -1293,7 +1335,7 @@ const syncWritableRoles = {
 const syncWritableFields = {
   settings: ['name', 'currency', 'taxRate', 'paymentMethods', 'updatedAt', 'createdAt'],
   categories: ['name', 'createdAt', 'updatedAt', 'deletedAt'],
-  menuItems: ['name', 'description', 'categoryId', 'categoryName', 'priceCents', 'available', 'imageUrl', 'variants', 'addOns', 'recipe', 'createdAt', 'updatedAt', 'deletedAt'],
+  menuItems: ['name', 'description', 'categoryId', 'categoryName', 'priceCents', 'available', 'imageUrl', 'itemType', 'weightOptions', 'variants', 'addOns', 'recipe', 'createdAt', 'updatedAt', 'deletedAt'],
   waiters: ['restaurantId', 'name', 'phone', 'status', 'createdBy', 'createdAt', 'updatedAt', 'deletedAt'],
   tables: ['name', 'capacity', 'status', 'currentOrderId', 'currentReservationId', 'mergedInto', 'mergedTableIds', 'mergedTableNames', 'unmergedCapacity', 'updatedAt', 'createdAt'],
   reservations: ['restaurantId', 'tableId', 'tableName', 'guestName', 'phone', 'covers', 'startsAt', 'endsAt', 'status', 'createdBy', 'createdAt', 'updatedAt', 'seatedBy', 'seatedAt', 'cancellationReason', 'cancelledBy'],

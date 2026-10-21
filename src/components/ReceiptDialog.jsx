@@ -1,5 +1,6 @@
-import { BadgeCheck, Printer, ReceiptText, Utensils, X } from 'lucide-react'
+import { BadgeCheck, Printer, ReceiptText, X } from 'lucide-react'
 import { formatMoney, normalizeCurrency } from '../utils/domain.js'
+import { publicAssetUrl } from '../utils/publicAssetUrl.js'
 import './receipt.css'
 
 function formatReceiptDate(value) {
@@ -15,6 +16,7 @@ function money(cents, currency) {
 }
 
 export function ReceiptDialog({ order, restaurantName = 'Restaurant', currency = 'PKR', onClose }) {
+  const logoUrl = publicAssetUrl('logo.jpg')
   const currencyCode = normalizeCurrency(currency)
   const lines = order.items || []
   const totalCents = Number(order.totalCents || 0)
@@ -33,7 +35,7 @@ export function ReceiptDialog({ order, restaurantName = 'Restaurant', currency =
 
         <article className="receipt-paper">
           <header className="receipt-header">
-            <div className="receipt-brand-mark"><Utensils size={19} /></div>
+            <div className="receipt-brand-mark"><img src={logoUrl} alt="RestaurantOS" style={{ width: 36, height: 36, borderRadius: 8, objectFit: 'cover' }} /></div>
             <p className="receipt-kicker">THANK YOU FOR VISITING</p>
             <h1>{restaurantName}</h1>
             <p className="receipt-subtitle">We hope to see you again soon.</p>
@@ -51,7 +53,8 @@ export function ReceiptDialog({ order, restaurantName = 'Restaurant', currency =
           <div className="receipt-items">
             {lines.map((item, index) => {
               const variantName = typeof item.selectedVariant === 'string' ? item.selectedVariant : item.selectedVariant?.name
-              const optionNames = [variantName, ...(item.selectedAddOns || []).map((option) => typeof option === 'string' ? option : option.name)]
+              const weightName = typeof item.selectedWeight === 'string' ? item.selectedWeight : item.selectedWeight?.label
+              const optionNames = [weightName, variantName, ...(item.selectedAddOns || []).map((option) => typeof option === 'string' ? option : option.name)]
                 .filter(Boolean)
               return (
                 <div className="receipt-item" key={`${item.itemId || item.name}-${index}`}>

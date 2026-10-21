@@ -145,6 +145,30 @@ describe('authentication routes', () => {
     expect(item.closest('tr')).not.toHaveTextContent('Unavailable')
   })
 
+  it('saves weight options on a menu item and restores them when editing it', async () => {
+    activateDemoSession()
+    renderApp('/menu')
+
+    fireEvent.click(await screen.findByRole('button', { name: /add menu item/i }))
+    fireEvent.change(screen.getByLabelText('Item name'), { target: { value: 'Weight-wise chicken' } })
+    fireEvent.change(screen.getByLabelText('Item type'), { target: { value: 'weight-wise' } })
+    fireEvent.change(screen.getByLabelText('Category'), { target: { value: 'mains' } })
+    fireEvent.click(screen.getByRole('button', { name: /add weight/i }))
+    fireEvent.change(screen.getByLabelText('Weight 1'), { target: { value: '500' } })
+    fireEvent.change(screen.getByLabelText('Price for weight 1'), { target: { value: '1100' } })
+    fireEvent.click(screen.getByRole('button', { name: /add weight/i }))
+    fireEvent.change(screen.getByLabelText('Weight 2'), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText('Weight unit 2'), { target: { value: 'kg' } })
+    fireEvent.change(screen.getByLabelText('Price for weight 2'), { target: { value: '2200' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const row = (await screen.findByText('Weight-wise chicken')).closest('tr')
+    fireEvent.click(within(row).getByRole('button', { name: /edit/i }))
+    expect(await screen.findByLabelText('Weight 1')).toHaveValue(500)
+    expect(screen.getByLabelText('Weight unit 2')).toHaveValue('kg')
+    expect(screen.getByLabelText('Price for weight 2')).toHaveValue(2200)
+  })
+
   it('shows owners only drafts they created in the POS draft list', async () => {
     activateDemoSession()
     saveDemoRecord('draftOrders', { createdBy: 'other-user', type: 'delivery' }, null)
@@ -276,6 +300,46 @@ describe('authentication routes', () => {
     expect(receipt).toHaveTextContent('Rs. 1,987.65')
     expect(receipt).toHaveTextContent('Rs. 2,030.86')
     expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({ type: 'dine-in', tableId: 'table-1' }))
+  })
+
+  it('selects different weights and quantities as separate POS lines and prints them', async () => {
+    activateDemoSession()
+    const weightItemId = saveDemoRecord('menuItems', {
+      name: 'POS weight chicken', description: 'Fresh chicken', categoryId: 'mains', categoryName: 'Mains',
+      priceCents: 60000, available: true, itemType: 'weight-wise', variants: [], addOns: [],
+      weightOptions: [
+        { id: 'chicken-250g', weightValue: 250, weightUnit: 'g', priceCents: 60000 },
+        { id: 'chicken-500g', weightValue: 500, weightUnit: 'g', priceCents: 110000 },
+        { id: 'chicken-1kg', weightValue: 1, weightUnit: 'kg', priceCents: 220000 },
+      ],
+    }, null)
+    const createOrder = vi.spyOn(dataOperations, 'createOrder').mockResolvedValue({
+      orderId: 'weight-order', orderNumber: 'R-WEIGHT', subtotalCents: 330000,
+      discountCents: 0, taxCents: 0, totalCents: 330000,
+    })
+    renderApp('/pos')
+
+    const menuItem = await screen.findByRole('button', { name: /choose weight for pos weight chicken/i })
+    fireEvent.click(menuItem)
+    fireEvent.click(screen.getByRole('radio', { name: /500 g/i }))
+    fireEvent.click(screen.getByRole('button', { name: /add one portion/i }))
+    expect(screen.getAllByText('Rs. 2,200.00').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: /add to cart/i }))
+
+    fireEvent.click(menuItem)
+    fireEvent.click(screen.getByRole('radio', { name: /1 kg/i }))
+    fireEvent.click(screen.getByRole('button', { name: /add to cart/i }))
+    fireEvent.click(screen.getByRole('button', { name: /create order/i }))
+
+    await waitFor(() => expect(createOrder).toHaveBeenCalled())
+    expect(createOrder.mock.calls[0][0].items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ itemId: weightItemId, quantity: 2, selectedWeightOptionId: 'chicken-500g' }),
+      expect.objectContaining({ itemId: weightItemId, quantity: 1, selectedWeightOptionId: 'chicken-1kg' }),
+    ]))
+    const receipt = await screen.findByRole('dialog', { name: /ready to print/i })
+    expect(receipt).toHaveTextContent('500 g')
+    expect(receipt).toHaveTextContent('1 kg')
+    expect(receipt).toHaveTextContent('Rs. 3,300.00')
   })
 
   it('supports direct bill mode and adding by Enter in the point of sale flow', async () => {

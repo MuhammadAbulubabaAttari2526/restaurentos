@@ -119,6 +119,10 @@ function buildReceipt({ order, financial, payments = [], settings = {}, printer 
       b.line(`  ${qty} x ${moneyShort(unitCents)}`)
     }
 
+    if (item.selectedWeight?.label) {
+      b.line(`  ${item.selectedWeight.label}`)
+    }
+
     // Options label
     if (item.selectedVariant?.name) {
       b.line(`  + ${item.selectedVariant.name}`)

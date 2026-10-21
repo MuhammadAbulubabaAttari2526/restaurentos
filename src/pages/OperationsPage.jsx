@@ -24,6 +24,7 @@ import './operations.css'
 
 const currency = normalizeCurrency(import.meta.env.VITE_CURRENCY || 'PKR')
 const money = (value) => formatMoney(value, currency)
+const weightLabel = (option) => `${option.weightValue} ${option.weightUnit}`
 
 function PageHeading({ eyebrow, title, description, action }) {
   return <div className="page-heading"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1>{description && <p className="page-description">{description}</p>}</div>{action}</div>
@@ -162,7 +163,7 @@ function PosPage() {
   const { records: waiters, loading: waitersLoading, truncated: waitersTruncated, limit: waitersLimit } = useRecords('waiters', 150)
   const [draftHydrated, setDraftHydrated] = useState(false)
   const [cart, setCart] = useState([])
-  const [ticketOpen, setTicketOpen] = useState(false)
+  const [ticketOpen, setTicketOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 900)
   const [category, setCategory] = useState('all')
   const [search, setSearch] = useState('')
   const searchRef = useRef(null)
@@ -253,7 +254,7 @@ function PosPage() {
   function addHighlightedItem() {
     const item = highlightedItem
     if (!item) return
-    if (item.variants?.length || item.addOns?.length) {
+    if (item.itemType === 'weight-wise' || item.variants?.length || item.addOns?.length) {
       setOptionItem(item)
       return
     }
@@ -300,7 +301,7 @@ function PosPage() {
     orderIntentIdRef.current = null
     paymentIntentIdRef.current = null
     setCart([])
-    setTicketOpen(false)
+    setTicketOpen(typeof window !== 'undefined' && window.innerWidth >= 900)
     setOrderType('direct-bill')
     setTableId('')
     setCovers(1)
@@ -335,18 +336,24 @@ function PosPage() {
     navigate('/orders')
   }
 
-  function addToCart(item, selectedVariantId = '', selectedAddOnIds = []) {
+  function addToCart(item, selectedVariantId = '', selectedAddOnIds = [], selectedWeightOptionId = '', quantity = 1) {
     const variant = item.variants?.find((option) => option.id === selectedVariantId)
     const addOns = (item.addOns || []).filter((option) => selectedAddOnIds.includes(option.id))
-    const lineId = `${item.id}:${selectedVariantId || 'base'}:${[...selectedAddOnIds].sort().join(',')}`
-    const unitPriceCents = item.priceCents + (variant?.priceDeltaCents || 0) + addOns.reduce((sum, option) => sum + option.priceCents, 0)
-    const optionLabel = [variant?.name, ...addOns.map((option) => option.name)].filter(Boolean).join(', ')
+    const weightOption = (item.weightOptions || []).find((option) => option.id === selectedWeightOptionId)
+    if (item.itemType === 'weight-wise' && !weightOption) return toast.error('Choose a valid weight before adding this item.')
+    const existing = cart.find((line) => line.lineId === `${item.id}:${selectedWeightOptionId || selectedVariantId || 'base'}:${[...selectedAddOnIds].sort().join(',')}`)
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99 || (existing && existing.quantity + quantity > 99)) return toast.error('Each cart line can contain up to 99 portions.')
+    const lineId = `${item.id}:${selectedWeightOptionId || selectedVariantId || 'base'}:${[...selectedAddOnIds].sort().join(',')}`
+    const unitPriceCents = (weightOption?.priceCents ?? item.priceCents) + (variant?.priceDeltaCents || 0) + addOns.reduce((sum, option) => sum + option.priceCents, 0)
+    const optionLabel = [weightOption ? weightLabel(weightOption) : variant?.name, ...addOns.map((option) => option.name)].filter(Boolean).join(', ')
     setCart((current) => {
       const found = current.find((line) => line.lineId === lineId)
-      if (found) return current.map((line) => line.lineId === lineId ? { ...line, quantity: line.quantity + 1 } : line)
-      return [...current, { lineId, itemId: item.id, name: item.name, unitPriceCents, quantity: 1, note: '', selectedVariantId: selectedVariantId || null, selectedAddOnIds, optionLabel }]
+      if (found) return current.map((line) => line.lineId === lineId ? { ...line, quantity: line.quantity + quantity } : line)
+      return [...current, { lineId, itemId: item.id, name: item.name, unitPriceCents, quantity, note: '', selectedVariantId: selectedVariantId || null, selectedWeightOptionId: selectedWeightOptionId || null, selectedWeight: weightOption ? { id: weightOption.id, value: weightOption.weightValue, unit: weightOption.weightUnit, label: weightLabel(weightOption) } : null, selectedAddOnIds, optionLabel }]
     })
-    setTicketOpen(true)
+    if (typeof window !== 'undefined' && window.innerWidth >= 900) {
+      setTicketOpen(true)
+    }
   }
 
   async function saveDraft() {
@@ -362,7 +369,7 @@ function PosPage() {
         waiterName: waiters.find((waiter) => waiter.id === waiterId)?.name || '',
         discountCents,
         note,
-        items: cart.map(({ itemId, quantity, note: itemNote, selectedVariantId, selectedAddOnIds }) => ({ itemId, quantity, note: itemNote, selectedVariantId, selectedAddOnIds })),
+        items: cart.map(({ itemId, quantity, note: itemNote, selectedVariantId, selectedWeightOptionId, selectedAddOnIds }) => ({ itemId, quantity, note: itemNote, selectedVariantId, selectedWeightOptionId, selectedAddOnIds })),
       })
       setActiveDraftId(draftId)
       setSelectedDraftId(draftId)
@@ -378,10 +385,12 @@ function PosPage() {
         const item = items.find((menuItem) => menuItem.id === line.itemId)
         if (!item || item.available === false) throw new Error('A saved item is no longer available. Review the menu and rebuild this draft.')
         const variant = item.variants?.find((option) => option.id === line.selectedVariantId)
+        const weightOption = (item.weightOptions || []).find((option) => option.id === line.selectedWeightOptionId)
         const addOns = (item.addOns || []).filter((option) => line.selectedAddOnIds?.includes(option.id))
-        if ((line.selectedVariantId && !variant) || addOns.length !== (line.selectedAddOnIds || []).length) throw new Error('Saved options changed in the menu. Review this draft and choose its options again.')
-        const lineId = `${item.id}:${line.selectedVariantId || 'base'}:${[...(line.selectedAddOnIds || [])].sort().join(',')}`
-        return { lineId, itemId: item.id, name: item.name, unitPriceCents: item.priceCents + (variant?.priceDeltaCents || 0) + addOns.reduce((sum, option) => sum + option.priceCents, 0), quantity: line.quantity, note: line.note || '', selectedVariantId: line.selectedVariantId || null, selectedAddOnIds: line.selectedAddOnIds || [], optionLabel: [variant?.name, ...addOns.map((option) => option.name)].filter(Boolean).join(', ') }
+        if ((line.selectedVariantId && !variant) || (item.itemType === 'weight-wise' && !weightOption) || (item.itemType !== 'weight-wise' && line.selectedWeightOptionId) || addOns.length !== (line.selectedAddOnIds || []).length) throw new Error('Saved options changed in the menu. Review this draft and choose its options again.')
+        const lineId = `${item.id}:${line.selectedWeightOptionId || line.selectedVariantId || 'base'}:${[...(line.selectedAddOnIds || [])].sort().join(',')}`
+        const selectedWeight = weightOption ? { id: weightOption.id, value: weightOption.weightValue, unit: weightOption.weightUnit, label: weightLabel(weightOption) } : null
+        return { lineId, itemId: item.id, name: item.name, unitPriceCents: (weightOption?.priceCents ?? item.priceCents) + (variant?.priceDeltaCents || 0) + addOns.reduce((sum, option) => sum + option.priceCents, 0), quantity: line.quantity, note: line.note || '', selectedVariantId: line.selectedVariantId || null, selectedWeightOptionId: line.selectedWeightOptionId || null, selectedWeight, selectedAddOnIds: line.selectedAddOnIds || [], optionLabel: [selectedWeight?.label || variant?.name, ...addOns.map((option) => option.name)].filter(Boolean).join(', ') }
       })
       setCart(nextCart)
       setOrderType(draft.type)
@@ -421,7 +430,7 @@ function PosPage() {
         waiterId: waiterId || null,
         discountCents,
         note: note.trim().slice(0, 500),
-        items: cart.map(({ itemId, quantity, note: itemNote, selectedVariantId, selectedAddOnIds }) => ({ itemId, quantity, note: itemNote, selectedVariantId, selectedAddOnIds })),
+        items: cart.map(({ itemId, quantity, note: itemNote, selectedVariantId, selectedWeightOptionId, selectedAddOnIds }) => ({ itemId, quantity, note: itemNote, selectedVariantId, selectedWeightOptionId, selectedAddOnIds })),
         createdBy: user.uid,
       })
       orderCreated = true
@@ -444,6 +453,8 @@ function PosPage() {
           name: line.name,
           quantity: line.quantity,
           unitPriceCents: line.unitPriceCents,
+          lineTotalCents: line.unitPriceCents * line.quantity,
+          selectedWeight: line.selectedWeight || null,
           selectedVariant: line.selectedVariantId
             ? { name: selectedItem?.variants?.find((variant) => variant.id === line.selectedVariantId)?.name || '' }
             : null,
@@ -504,7 +515,7 @@ function PosPage() {
       paymentIntentIdRef.current = null
       resetStableIntentId(`pos-payment-${orderId}`)
       setCart([])
-      setTicketOpen(false)
+      setTicketOpen(typeof window !== 'undefined' && window.innerWidth >= 900)
       setNote('')
       setDiscount('')
       setTableId('')
@@ -539,10 +550,11 @@ function PosPage() {
         </div>
         <div className="pos-category-row" role="tablist" aria-label="Menu categories"><button type="button" role="tab" aria-selected={category === 'all'} className={category === 'all' ? 'is-active' : ''} onClick={() => setCategory('all')}>Everything</button>{categories.map((entry) => <button type="button" role="tab" aria-selected={category === entry.id} key={entry.id} className={category === entry.id ? 'is-active' : ''} onClick={() => setCategory(entry.id)}>{entry.name}</button>)}</div>
         {itemsLoading ? <div className="pos-product-grid"><LoadingLines count={6} /></div> : visibleItems.length ? <div className="pos-product-grid">{visibleItems.map((item) => {
-          const hasOptions = Boolean(item.variants?.length || item.addOns?.length)
-          return <button type="button" className="pos-product-card" key={item.id} onClick={() => hasOptions ? setOptionItem(item) : addToCart(item)} onMouseEnter={() => setSelectedMenuId(item.id)} aria-label={`Add ${item.name}, ${money(item.priceCents)}${hasOptions ? ', choose options' : ''}`} disabled={busy || Boolean(pendingPaymentOrder)}>
+          const hasOptions = Boolean(item.itemType === 'weight-wise' || item.variants?.length || item.addOns?.length)
+          const displayPrice = item.itemType === 'weight-wise' ? Math.min(...(item.weightOptions || []).map((option) => option.priceCents)) : item.priceCents
+          return <button type="button" className="pos-product-card" key={item.id} onClick={() => hasOptions ? setOptionItem(item) : addToCart(item)} onMouseEnter={() => setSelectedMenuId(item.id)} aria-label={`${item.itemType === 'weight-wise' ? 'Choose weight for' : 'Add'} ${item.name}, ${money(displayPrice)}${hasOptions ? ', choose options' : ''}`} disabled={busy || Boolean(pendingPaymentOrder)}>
             <span className="pos-product-photo"><MenuImage url={item.imageUrl} name={item.name} /><span className="pos-product-add"><Plus size={19} /></span>{hasOptions && <span className="pos-option-badge">Customize</span>}</span>
-            <span className="pos-product-info"><span className="pos-product-category">{item.categoryName || categories.find((entry) => entry.id === item.categoryId)?.name || 'Menu favorite'}</span><strong>{item.name}</strong><span className="pos-product-description">{item.description || (hasOptions ? 'Options available' : 'Made fresh to order')}</span><span className="pos-product-price">{money(item.priceCents)}<span> / item</span></span></span>
+            <span className="pos-product-info"><span className="pos-product-category">{item.categoryName || categories.find((entry) => entry.id === item.categoryId)?.name || 'Menu favorite'}</span><strong>{item.name}</strong><span className="pos-product-description">{item.description || (item.itemType === 'weight-wise' ? 'Choose a weight' : hasOptions ? 'Options available' : 'Made fresh to order')}</span><span className="pos-product-price">{item.itemType === 'weight-wise' ? 'From ' : ''}{money(displayPrice)}<span>{item.itemType === 'weight-wise' ? ' / weight' : ' / item'}</span></span></span>
           </button>
         })}</div> : <div className="pos-empty-catalog"><div className="pos-empty-icon"><Search size={21} /></div><strong>{search ? 'No matching dishes' : 'Nothing on this menu yet'}</strong><span>{search ? 'Try another name or choose a different category.' : 'Add available items in Menu management to start taking orders.'}</span>{search && <button type="button" className="button button-subtle" onClick={() => setSearch('')}>Clear search</button>}</div>}
         <div className="pos-catalog-foot"><span><i /> Prices update from your live menu</span><span>Tap any item to add it to the ticket</span></div>
@@ -577,9 +589,39 @@ function PosPage() {
         <p className="pos-trust-note"><Check size={13} /> Menu prices and tax are verified before the order is saved.</p>
       </aside>
     </div>
-    {cart.length > 0 && !ticketOpen && <button type="button" className="pos-open-ticket" onClick={() => setTicketOpen(true)}><ShoppingBag size={18} /><span>View ticket</span><strong>{itemCount} {itemCount === 1 ? 'item' : 'items'} · {money(totals.totalCents)}</strong><ArrowUpRight size={17} /></button>}
-    {optionItem && <MenuOptionsDialog item={optionItem} onCancel={() => setOptionItem(null)} onAdd={(variantId, addOnIds) => { addToCart(optionItem, variantId, addOnIds); setOptionItem(null) }} />}
+    {ticketOpen && <div className="pos-ticket-backdrop" onClick={() => setTicketOpen(false)} aria-hidden="true" />}
+    {cart.length > 0 && !ticketOpen && (
+      <button type="button" className="pos-open-ticket" onClick={() => setTicketOpen(true)} aria-label="View current order">
+        <span className="pos-open-ticket-main"><ShoppingBag size={18} /><span>View ticket ({itemCount})</span></span>
+        <strong className="pos-open-ticket-total">{money(totals.totalCents)}</strong>
+        <ArrowUpRight size={17} />
+      </button>
+    )}
+    {optionItem?.itemType === 'weight-wise' && <WeightSelectionDialog item={optionItem} onCancel={() => setOptionItem(null)} onAdd={(weightOptionId, addOnIds, quantity) => { addToCart(optionItem, '', addOnIds, weightOptionId, quantity); setOptionItem(null) }} />}
+    {optionItem && optionItem.itemType !== 'weight-wise' && <MenuOptionsDialog item={optionItem} onCancel={() => setOptionItem(null)} onAdd={(variantId, addOnIds) => { addToCart(optionItem, variantId, addOnIds); setOptionItem(null) }} />}
     {receipt && <ReceiptDialog order={receipt} restaurantName={restaurant[0]?.name || 'Restaurant'} currency={restaurant[0]?.currency || currency} onClose={() => setReceipt(null)} />}
+  </div>
+}
+
+function WeightSelectionDialog({ item, onCancel, onAdd }) {
+  const [weightId, setWeightId] = useState(item.weightOptions?.[0]?.id || '')
+  const [addOnIds, setAddOnIds] = useState([])
+  const [quantity, setQuantity] = useState(1)
+  const selectedWeight = item.weightOptions?.find((option) => option.id === weightId)
+  const addOns = (item.addOns || []).filter((option) => addOnIds.includes(option.id))
+  const unitPriceCents = (selectedWeight?.priceCents || 0) + addOns.reduce((sum, option) => sum + option.priceCents, 0)
+  function toggleAddOn(id) {
+    setAddOnIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id])
+  }
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+    <section className="modal-panel options-modal weight-options-modal" role="dialog" aria-modal="true" aria-labelledby="weight-options-title">
+      <div className="modal-heading"><div><p className="eyebrow">SELECT WEIGHT</p><h2 id="weight-options-title">{item.name} — Select Weight</h2></div><button className="icon-button" aria-label="Close" onClick={onCancel}>×</button></div>
+      <fieldset className="option-fieldset"><legend>Available weights</legend>{(item.weightOptions || []).map((option) => <label className={`option-choice ${weightId === option.id ? 'is-selected' : ''}`} key={option.id}><input type="radio" name="weight-option" checked={weightId === option.id} onChange={() => setWeightId(option.id)} /><span>{weightLabel(option)}</span><strong>{money(option.priceCents)}</strong></label>)}</fieldset>
+      {item.addOns?.length > 0 && <fieldset className="option-fieldset"><legend>Add-ons</legend>{item.addOns.map((option) => <label className="option-choice" key={option.id}><input type="checkbox" checked={addOnIds.includes(option.id)} onChange={() => toggleAddOn(option.id)} /><span>{option.name}</span><strong>+{money(option.priceCents)}</strong></label>)}</fieldset>}
+      <div className="weight-portion-row"><span>Portions</span><div className="pos-quantity-control"><button type="button" aria-label="Remove one portion" onClick={() => setQuantity((value) => Math.max(1, value - 1))} disabled={quantity <= 1}><Minus size={14} /></button><span>{quantity}</span><button type="button" aria-label="Add one portion" onClick={() => setQuantity((value) => Math.min(99, value + 1))} disabled={quantity >= 99}><Plus size={14} /></button></div></div>
+      <div className="weight-selection-summary"><div><span>Selected weight</span><strong>{selectedWeight ? weightLabel(selectedWeight) : 'Choose a weight'}</strong></div><div><span>Unit price</span><strong>{money(unitPriceCents)}</strong></div><div><span>Quantity</span><strong>× {quantity}</strong></div><div className="weight-selection-total"><span>Total</span><strong>{money(unitPriceCents * quantity)}</strong></div></div>
+      <div className="modal-actions"><button className="button button-subtle" onClick={onCancel}>Cancel</button><button className="button button-primary" disabled={!selectedWeight} onClick={() => onAdd(weightId, addOnIds, quantity)}>Add to Cart</button></div>
+    </section>
   </div>
 }
 
@@ -709,11 +751,12 @@ function OrderDetailsDialog({ order, canSeeFinancials, onClose }) {
           <div className="order-details-list-heading"><strong>Items</strong><span>{items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0)} total</span></div>
           {items.length ? items.map((item, index) => {
             const variantName = typeof item.selectedVariant === 'string' ? item.selectedVariant : item.selectedVariant?.name
+            const weightName = typeof item.selectedWeight === 'string' ? item.selectedWeight : item.selectedWeight?.label
             const addOnNames = (item.selectedAddOns || []).map((option) => typeof option === 'string' ? option : option.name).filter(Boolean)
             return <div className="order-details-item" key={`${item.itemId || item.name}-${index}`}>
               <div>
                 <strong>{item.quantity} × {item.name}</strong>
-                {(variantName || addOnNames.length > 0) && <span>{[variantName, ...addOnNames].filter(Boolean).join(' · ')}</span>}
+                {(weightName || variantName || addOnNames.length > 0) && <span>{[weightName, variantName, ...addOnNames].filter(Boolean).join(' · ')}</span>}
                 {item.note && <small>Note: {item.note}</small>}
               </div>
               {canSeeFinancials && Number.isFinite(Number(item.unitPriceCents)) && <strong>{money(Number(item.unitPriceCents) * Number(item.quantity || 0))}</strong>}
@@ -1120,7 +1163,27 @@ function MenuManagement() {
   async function saveItem(values) {
     setBusy(true)
     try {
-      const priceCents = Math.round(Number(values.price) * 100)
+      const itemType = values.itemType || 'non-weight-wise'
+      const weightOptions = itemType === 'weight-wise' ? values.weightOptions.map((option) => {
+        const weightValue = Number(option.weightValue)
+        const priceCents = Math.round(Number(option.price) * 100)
+        if (!Number.isFinite(weightValue) || weightValue <= 0 || !['g', 'kg'].includes(option.weightUnit) || !Number.isSafeInteger(priceCents) || priceCents < 1) {
+          throw new Error('Each weight needs a positive weight and a valid positive price.')
+        }
+        return { id: option.id || crypto.randomUUID(), weightValue, weightUnit: option.weightUnit, priceCents }
+      }) : []
+      if (itemType === 'weight-wise' && weightOptions.length === 0) throw new Error('Add at least one weight option before saving this item.')
+      if (!['weight-wise', 'non-weight-wise'].includes(itemType)) throw new Error('Choose a valid item type.')
+      const normalizedWeights = new Set()
+      for (const option of weightOptions) {
+        const milliGrams = Math.round(option.weightValue * (option.weightUnit === 'kg' ? 1000000 : 1000))
+        if (!Number.isSafeInteger(milliGrams) || Math.abs(option.weightValue * (option.weightUnit === 'kg' ? 1000000 : 1000) - milliGrams) > 0.000001 || normalizedWeights.has(milliGrams)) {
+          throw new Error('Weight options must be unique, including equivalent g and kg values.')
+        }
+        normalizedWeights.add(milliGrams)
+      }
+      const priceCents = itemType === 'weight-wise' ? Math.min(...weightOptions.map((option) => option.priceCents)) : Math.round(Number(values.price) * 100)
+      if (!Number.isSafeInteger(priceCents) || priceCents < 1) throw new Error('Enter a valid positive price.')
       const rawImageUrl = values.imageUrl?.trim() || ''
       const imageUrl = normalizeMenuImageUrl(rawImageUrl)
       if (rawImageUrl && !imageUrl) throw new Error('Enter a valid HTTPS image URL.')
@@ -1130,9 +1193,11 @@ function MenuManagement() {
         categoryId: values.categoryId,
         categoryName: categories.find((category) => category.id === values.categoryId)?.name || '',
         priceCents,
+        itemType,
+        weightOptions,
         available: String(values.available) !== 'false',
         imageUrl,
-        variants: parseMenuOptions(values.variantsText, 'priceDeltaCents', editItem.variants || []),
+        variants: itemType === 'weight-wise' ? [] : parseMenuOptions(values.variantsText, 'priceDeltaCents', editItem.variants || []),
         addOns: parseMenuOptions(values.addOnsText, 'priceCents', editItem.addOns || []),
         recipe: parseRecipeText(values.recipeText, inventory),
       }
@@ -1150,8 +1215,8 @@ function MenuManagement() {
   async function toggle(item) {
     try { await saveRecord(membership.restaurantId, 'menuItems', { available: item.available === false }, item.id); toast.success('Availability updated.') } catch (problem) { toast.error(friendlyError(problem)) }
   }
-  const fields = [{ name: 'name', label: 'Item name', required: true }, { name: 'price', label: 'Base price', type: 'number', required: true, min: 0.01, step: '0.01' }, { name: 'categoryId', label: 'Category', type: 'select', options: categories.map(({ id, name }) => ({ value: id, label: name })), required: true }, { name: 'description', label: 'Description' }, { name: 'variantsText', label: 'Variants (one per line: Name | price change)', type: 'textarea', placeholder: 'Large | 2.00\nSmall | -1.00' }, { name: 'addOnsText', label: 'Add-ons (one per line: Name | price)', type: 'textarea', placeholder: 'Extra cheese | 1.25\nAvocado | 2.00' }, { name: 'recipeText', label: 'Recipe (one per line: stock item name | quantity per serving)', type: 'textarea', placeholder: 'Tomatoes | 0.2\nOlive oil | 0.01' }, { name: 'available', label: 'Available to order', type: 'select', options: [{ value: 'true', label: 'Available' }, { value: 'false', label: 'Unavailable' }] }, { name: 'imageUrl', label: 'Public image URL (optional)', type: 'url', placeholder: 'https://example.com/menu-image.jpg' }]
-  return <><PageHeading eyebrow="MENU & CATALOG" title="Menu" description="Keep prices, availability and guest-facing details current." action={<button className="button button-primary" onClick={() => setEditItem({ available: true })}><Plus size={16} /> Add menu item</button>} /><LimitNotices sources={[{ truncated: itemsTruncated, limit: itemsLimit, label: 'menu items' }, { truncated: categoriesTruncated, limit: categoriesLimit, label: 'categories' }, { truncated: inventoryTruncated, limit: inventoryLimit, label: 'inventory records' }]} />{error && <div className="inline-alert">{error}</div>}
+  const fields = [{ name: 'name', label: 'Item name', required: true }, { name: 'itemType', label: 'Item type', type: 'select', options: [{ value: 'non-weight-wise', label: 'Non-Weight-Wise — per piece or serving' }, { value: 'weight-wise', label: 'Weight-Wise — choose a weight in POS' }] }, { name: 'price', label: 'Base price', type: 'number', required: true, min: 0.01, step: '0.01', showWhen: (values) => values.itemType !== 'weight-wise' }, { name: 'weightOptions', label: 'Weight options and prices', type: 'weightOptions', showWhen: (values) => values.itemType === 'weight-wise' }, { name: 'categoryId', label: 'Category', type: 'select', options: categories.map(({ id, name }) => ({ value: id, label: name })), required: true }, { name: 'description', label: 'Description' }, { name: 'variantsText', label: 'Variants (one per line: Name | price change)', type: 'textarea', placeholder: 'Large | 2.00\nSmall | -1.00', showWhen: (values) => values.itemType !== 'weight-wise' }, { name: 'addOnsText', label: 'Add-ons (one per line: Name | price)', type: 'textarea', placeholder: 'Extra cheese | 1.25\nAvocado | 2.00' }, { name: 'recipeText', label: 'Recipe (one per line: stock item name | quantity per serving)', type: 'textarea', placeholder: 'Tomatoes | 0.2\nOlive oil | 0.01' }, { name: 'available', label: 'Available to order', type: 'select', options: [{ value: 'true', label: 'Available' }, { value: 'false', label: 'Unavailable' }] }, { name: 'imageUrl', label: 'Public image URL (optional)', type: 'url', placeholder: 'https://example.com/menu-image.jpg' }]
+  return <><PageHeading eyebrow="MENU & CATALOG" title="Menu" description="Keep prices, availability and guest-facing details current." action={<button className="button button-primary" onClick={() => setEditItem({ available: true, itemType: 'non-weight-wise', weightOptions: [] })}><Plus size={16} /> Add menu item</button>} /><LimitNotices sources={[{ truncated: itemsTruncated, limit: itemsLimit, label: 'menu items' }, { truncated: categoriesTruncated, limit: categoriesLimit, label: 'categories' }, { truncated: inventoryTruncated, limit: inventoryLimit, label: 'inventory records' }]} />{error && <div className="inline-alert">{error}</div>}
     <section className="panel category-strip"><div><p className="eyebrow">CATEGORIES</p><div className="category-chip-list">{categories.map((category) => <span className="category-chip" key={category.id}>{category.name}</span>)}{categories.length === 0 && <span className="muted-copy">Add categories before creating menu items.</span>}</div></div><form onSubmit={addCategory} className="add-category-form"><input aria-label="New category name" placeholder="Category name" value={categoryName} onChange={(event) => setCategoryName(event.target.value)} /><button className="button button-subtle" type="submit" disabled={!categoryName.trim()}><Plus size={15} /> Add</button></form></section>
     <section className="panel records-panel">{loading ? <LoadingLines /> : items.length ? <div className="table-scroll"><table><thead><tr><th>Item</th><th>Category</th><th>Price</th><th>Options</th><th>Recipe</th><th>Availability</th><th /></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><div className="menu-table-name"><MenuImage url={item.imageUrl} name={item.name} /><div><strong>{item.name}</strong><small>{item.description || '—'}</small></div></div></td><td>{categories.find((category) => category.id === item.categoryId)?.name || 'Uncategorized'}</td><td>{money(item.priceCents)}</td><td>{(item.variants?.length || 0) + (item.addOns?.length || 0) || '—'}</td><td>{item.recipe?.length || '—'}</td><td><button className={`availability-button ${item.available === false ? 'unavailable' : ''}`} onClick={() => toggle(item)}>{item.available === false ? 'Unavailable' : 'Available'}</button></td><td><button className="button button-small" onClick={() => setEditItem({ ...item, price: (item.priceCents / 100).toFixed(2), available: String(item.available !== false), variantsText: formatMenuOptions(item.variants, 'priceDeltaCents'), addOnsText: formatMenuOptions(item.addOns, 'priceCents'), recipeText: formatRecipeText(item.recipe, inventory) })}>Edit</button></td></tr>)}</tbody></table></div> : <EmptyState title="Your menu starts here" detail="Create categories, then add items with verified prices." />}</section>
     {editItem && <FormDialog title={editItem.id ? 'Edit menu item' : 'Add menu item'} fields={fields} initial={editItem} onClose={() => setEditItem(null)} onSubmit={saveItem} busy={busy} />}
@@ -1384,8 +1449,30 @@ function BreakdownTable({ title, rows }) {
   return <section className="panel records-panel"><div className="section-title breakdown-heading"><div><h2>{title}</h2></div></div><div className="table-scroll"><table><thead><tr>{columns.map((key) => <th key={key}>{key}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={`${title}-${index}`}>{columns.map((key) => <td key={key}>{key.toLowerCase().includes('cents') ? money(row[key]) : row[key]}</td>)}</tr>)}</tbody></table></div></section>
 }
 
+function WeightOptionsEditor({ value = [], onChange }) {
+  function update(index, key, nextValue) {
+    onChange(value.map((option, optionIndex) => optionIndex === index ? { ...option, [key]: nextValue } : option))
+  }
+  function addWeight() {
+    onChange([...value, { id: crypto.randomUUID(), weightValue: '', weightUnit: 'g', price: '' }])
+  }
+  return <div className="weight-options-editor">
+    <p>Set a separate price for every weight. Grams and kilograms are checked for equivalent duplicates.</p>
+    {value.map((option, index) => <div className="weight-option-row" key={option.id || index}>
+      <label><span>Weight</span><input aria-label={`Weight ${index + 1}`} type="number" min="0.001" step="any" value={option.weightValue} onChange={(event) => update(index, 'weightValue', event.target.value)} placeholder="500" /></label>
+      <label><span>Unit</span><select aria-label={`Weight unit ${index + 1}`} value={option.weightUnit || 'g'} onChange={(event) => update(index, 'weightUnit', event.target.value)}><option value="g">g</option><option value="kg">kg</option></select></label>
+      <label><span>Price</span><input aria-label={`Price for weight ${index + 1}`} type="number" min="0.01" step="0.01" value={option.price} onChange={(event) => update(index, 'price', event.target.value)} placeholder="1100.00" /></label>
+      <button type="button" className="icon-button weight-remove-button" aria-label={`Remove weight ${index + 1}`} onClick={() => onChange(value.filter((_, optionIndex) => optionIndex !== index))}><Trash2 size={15} /></button>
+    </div>)}
+    <button type="button" className="button button-subtle weight-add-button" onClick={addWeight}><Plus size={15} /> Add Weight (+)</button>
+  </div>
+}
+
 function FormDialog({ title, fields, initial, onClose, onSubmit, busy }) {
-  const [values, setValues] = useState(() => Object.fromEntries(fields.map((field) => [field.name, initial[field.name] ?? field.options?.[0]?.value ?? ''])))
+  const [values, setValues] = useState(() => Object.fromEntries(fields.map((field) => {
+    if (field.type === 'weightOptions') return [field.name, (initial[field.name] || []).map((option) => ({ ...option, weightValue: String(option.weightValue), price: ((option.priceCents || 0) / 100).toFixed(2) }))]
+    return [field.name, initial[field.name] ?? field.options?.[0]?.value ?? '']
+  })))
   function submit(event) {
     event.preventDefault()
     const form = event.currentTarget
@@ -1397,7 +1484,7 @@ function FormDialog({ title, fields, initial, onClose, onSubmit, busy }) {
     <section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="form-dialog-title">
       <div className="modal-heading"><div><p className="eyebrow">RESTAURANTOS</p><h2 id="form-dialog-title">{title}</h2></div><button className="icon-button close-modal" onClick={onClose} aria-label="Close">×</button></div>
       <form className="modal-form" onSubmit={submit}>
-        {fields.map((field) => <label key={field.name}>
+        {fields.filter((field) => !field.showWhen || field.showWhen(values)).map((field) => field.type === 'weightOptions' ? <div className="modal-field weight-options-field" key={field.name}><span>{field.label}</span><WeightOptionsEditor value={values[field.name] || []} onChange={(nextValue) => setValues({ ...values, [field.name]: nextValue })} /></div> : <label key={field.name}>
           {field.label}
           {field.type === 'select'
             ? <select name={field.name} required={field.required} value={values[field.name]} onChange={(event) => setValues({ ...values, [field.name]: event.target.value })}><option value="" disabled>Select an option</option>{field.options?.map((option) => typeof option === 'string' ? <option key={option} value={option}>{option}</option> : <option key={option.value} value={option.value}>{option.label?.replace(' (permission required)', '')}</option>)}</select>

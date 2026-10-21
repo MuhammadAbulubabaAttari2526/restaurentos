@@ -3,7 +3,7 @@ const SESSION_KEY = 'restaurantos.session'
 export function getApiBaseUrl() {
   const configured = import.meta.env?.VITE_API_BASE_URL?.trim()
   if (configured) return configured.replace(/\/+$/, '')
-  if (typeof window !== 'undefined' && window.posApi?.isElectron) return 'http://localhost:8787'
+  if (typeof window !== 'undefined' && window.posApi?.isElectron && import.meta.env.DEV) return 'http://localhost:8787'
   return ''
 }
 
@@ -21,7 +21,7 @@ export function saveSessionToken(token) {
 export async function apiRequest(path, { method = 'GET', body, token = getSessionToken() } = {}) {
   const base = getApiBaseUrl()
   if (!base && typeof window !== 'undefined' && window.location.protocol === 'file:') {
-    throw new Error('Set VITE_API_BASE_URL to your RestaurantOS server URL before building the desktop app.')
+    throw new Error('The RestaurantOS server address is not configured in this desktop build.')
   }
   const response = await fetch(`${base}/api/${path.replace(/^\/+/, '')}`, {
     method,
@@ -77,4 +77,20 @@ export async function logoutSession() {
   } finally {
     saveSessionToken('')
   }
+}
+
+export async function requestPasswordReset(email) {
+  return apiRequest('auth/request-password-reset', { method: 'POST', body: { email }, token: '' })
+}
+
+export async function resetPasswordWithToken(token, password) {
+  return apiRequest('auth/reset-password', { method: 'POST', body: { token, password }, token: '' })
+}
+
+export async function sendEmailVerification(email) {
+  return apiRequest('auth/send-verification-email', { method: 'POST', body: email ? { email } : {} })
+}
+
+export async function verifyEmailWithToken(token) {
+  return apiRequest('auth/verify-email', { method: 'POST', body: { token }, token: '' })
 }

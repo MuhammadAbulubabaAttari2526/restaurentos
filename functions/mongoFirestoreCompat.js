@@ -221,7 +221,18 @@ class QueryReference {
   where(field, operator, value) {
     if (typeof field !== 'string' || !/^[A-Za-z][A-Za-z0-9_.-]{0,127}$/.test(field)) throw new TypeError('The query field is invalid.')
     if (!['==', '<', '<=', '>', '>=', 'in'].includes(operator)) throw new TypeError(`The query operator ${operator} is not supported.`)
-    if (operator === 'in' && (!Array.isArray(value) || value.length > 30)) throw new TypeError('The in query must contain at most 30 values.')
+    if (operator === 'in') {
+      if (!Array.isArray(value) || value.length > 30) throw new TypeError('The in query must contain at most 30 values.')
+      for (const item of value) {
+        if (item && typeof item === 'object' && !(item instanceof Date)) {
+          throw new TypeError('The in query values must be primitives or Dates.')
+        }
+      }
+    } else if (value && typeof value === 'object' && !(value instanceof Date)) {
+      if (Object.keys(value).some((k) => k.startsWith('$'))) {
+        throw new TypeError('Query values cannot contain MongoDB operator keys.')
+      }
+    }
     return new QueryReference(this.collectionPath, [...this.filters, [field, operator, cloneValue(value)]], this.order, this.max)
   }
 

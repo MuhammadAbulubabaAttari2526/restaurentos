@@ -433,7 +433,24 @@ function runLocalOperation(restaurantId, name, payload = {}) {
 
     case 'saveOrderDraft': {
       const draftId = payload.draftId || payload.id || makeId()
-      genericRepository.upsert(restaurantId, 'draftOrders', { ...payload, id: draftId }, draftId)
+      if (!Array.isArray(payload.items) || payload.items.length < 1 || payload.items.length > 40) {
+        throw new Error('A draft must contain 1 to 40 menu lines.')
+      }
+      const menuItems = new Map(genericRepository.query(restaurantId, 'menuItems', [], 500).map((item) => [item.id, item]))
+      const items = payload.items.map((line) => {
+        const item = menuItems.get(line.itemId)
+        if (!item || item.available === false) throw new Error('One or more draft items are no longer available.')
+        priceMenuLine(item, line)
+        return {
+          itemId: line.itemId,
+          quantity: line.quantity,
+          note: typeof line.note === 'string' ? line.note.trim().slice(0, 300) : '',
+          selectedVariantId: line.selectedVariantId || null,
+          selectedWeightOptionId: line.selectedWeightOptionId || null,
+          selectedAddOnIds: Array.isArray(line.selectedAddOnIds) ? line.selectedAddOnIds : [],
+        }
+      })
+      genericRepository.upsert(restaurantId, 'draftOrders', { ...payload, items, id: draftId }, draftId)
       return { draftId }
     }
 

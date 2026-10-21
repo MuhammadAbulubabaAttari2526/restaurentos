@@ -15,7 +15,7 @@ export function AuthProvider({ children }) {
       await window.posApi.sync.setCredentials({
         apiBaseUrl: getApiBaseUrl() || 'http://localhost:8787',
         authToken: getSessionToken(),
-        expiresAt: expiresAt || new Date(Date.now() + 30 * 86400000).toISOString(),
+        expiresAt: expiresAt || new Date(Date.now() + 86400000).toISOString(),
         restaurantId: nextMembership.restaurantId,
       })
     } else {

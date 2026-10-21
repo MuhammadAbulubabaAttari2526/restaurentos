@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
@@ -44,6 +44,20 @@ describe('SQLite migration backup safety', () => {
     })
     expect(db.prepare('SELECT version FROM schema_version').get().version).toBe(1)
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'kept'").get().name).toBe('kept')
+    db.close()
+  })
+})
+
+describe('weight-wise menu migration', () => {
+  it('adds default non-weight settings without changing existing menu rows', () => {
+    const db = new Database(':memory:')
+    db.exec(`CREATE TABLE menu_items (id TEXT PRIMARY KEY, name TEXT NOT NULL); INSERT INTO menu_items (id, name) VALUES ('legacy-chicken', 'Chicken');`)
+    const migration = readFileSync(path.join(process.cwd(), 'database/migrations/008_weight_wise_menu_items.sql'), 'utf8')
+    db.exec(migration)
+
+    expect(db.prepare('SELECT name, item_type, weight_options_json FROM menu_items WHERE id = ?').get('legacy-chicken')).toEqual({
+      name: 'Chicken', item_type: 'non-weight-wise', weight_options_json: '[]',
+    })
     db.close()
   })
 })

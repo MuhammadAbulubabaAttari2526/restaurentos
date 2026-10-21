@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
-import { ArrowRight, Utensils } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import { useAuth } from '../context/useAuth.js'
 import { completeStaffInvite, getStaffInvitation } from '../services/data.js'
 import { friendlyError } from '../utils/domain.js'
+import { publicAssetUrl } from '../utils/publicAssetUrl.js'
 import './auth.css'
 
 export function JoinPage() {
   const { restaurantId, invitationId } = useParams()
+  const logoUrl = publicAssetUrl('logo.jpg')
   const { user, membership, login, joinInvitation, refreshMembership, logout } = useAuth()
   const navigate = useNavigate()
   const [invitation, setInvitation] = useState(null)
@@ -88,7 +90,7 @@ export function JoinPage() {
     }
   }
 
-  return <main className="login-screen signup-screen"><div className="login-art" aria-hidden="true"><div className="art-orbit orbit-one" /><div className="art-orbit orbit-two" /><div className="art-stamp"><Utensils size={32} /><span>GOOD FOOD<br />GOOD SERVICE</span></div><div className="art-caption"><span>HOSPITALITY, IN RHYTHM</span><strong>Your whole restaurant,<br />working as one.</strong></div></div><section className="login-panel"><Link to="/" className="login-brand" aria-label="RestaurantOS home"><span className="brand-mark"><Utensils size={19} /></span><strong>RestaurantOS</strong></Link><div className="login-copy"><p className="eyebrow">TEAM INVITATION</p><h1>{loading ? <>Checking<br />invitation.</> : <>Join your<br />restaurant.</>}</h1><p>{invitation ? `${invitation.displayName} invited ${invitation.email} as ${invitation.role}. Set a password to activate your account and join the team.` : 'This invitation link is invalid or has expired.'}</p></div>
+  return <main className="login-screen signup-screen"><div className="login-art" aria-hidden="true"><div className="art-orbit orbit-one" /><div className="art-orbit orbit-two" /><div className="art-stamp"><img src={logoUrl} alt="" className="art-stamp-logo" /><span>SMART · FAST<br />COMPLETE</span></div><div className="art-caption"><span>HOSPITALITY, IN RHYTHM</span><strong>Your whole restaurant,<br />working as one.</strong></div></div><section className="login-panel"><Link to="/" className="login-brand" aria-label="RestaurantOS home"><img className="brand-mark" src={logoUrl} alt="RestaurantOS" /><strong>RestaurantOS</strong></Link><div className="login-copy"><p className="eyebrow">TEAM INVITATION</p><h1>{loading ? <>Checking<br />invitation.</> : <>Join your<br />restaurant.</>}</h1><p>{invitation ? `${invitation.displayName} invited ${invitation.email} as ${invitation.role}. Set a password to activate your account and join the team.` : 'This invitation link is invalid or has expired.'}</p></div>
     {error && <div className="inline-alert" role="alert">{error}</div>}
     {loading ? <div className="loading-lines"><i /><i /><i /></div> : invitation && !user && <>
       <div className="join-mode-switch"><button type="button" aria-pressed={mode === 'signup'} className={mode === 'signup' ? 'selected' : ''} onClick={() => { setMode('signup'); setError('') }}>Set password</button><button type="button" aria-pressed={mode === 'signin'} className={mode === 'signin' ? 'selected' : ''} onClick={() => { setMode('signin'); setError('') }}>I have an account</button></div>

@@ -75,6 +75,10 @@ function buildKot({ order, printer = {}, options = {} }) {
     b.line(`${prefix}${qty}x  ${String(item.name || '').slice(0, b.cols - prefix.length - 5)}`)
     b.bold(false)
 
+    if (item.selectedWeight?.label) {
+      b.line(`    >> ${item.selectedWeight.label}`)
+    }
+
     // Variant
     if (item.selectedVariant?.name) {
       b.line(`    >> ${item.selectedVariant.name}`)

@@ -19,6 +19,37 @@ function validOption(option, field, allowNegative = false) {
   return { id: option.id, name: option.name.trim(), price }
 }
 
+function normalizeWeightOptions(options) {
+  if (!Array.isArray(options)) throw new Error('This menu item has invalid weight settings.')
+  const ids = new Set()
+  const weights = new Set()
+  return options.map((option) => {
+    if (!option || typeof option !== 'object' || typeof option.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(option.id) || ids.has(option.id)) {
+      throw new Error('A configured weight option is invalid.')
+    }
+    if (typeof option.weightValue !== 'number' || !Number.isFinite(option.weightValue) || option.weightValue <= 0) {
+      throw new Error('Weight must be a positive number.')
+    }
+    if (!['g', 'kg'].includes(option.weightUnit)) throw new Error('Choose grams or kilograms for each weight.')
+    const grams = option.weightValue * (option.weightUnit === 'kg' ? 1000 : 1)
+    const milliGrams = Math.round(grams * 1000)
+    if (!Number.isSafeInteger(milliGrams) || milliGrams < 1 || milliGrams > 1000000000 || Math.abs(grams * 1000 - milliGrams) > 0.000001) {
+      throw new Error('Weight must be within 0.001 g and 1,000 kg.')
+    }
+    if (weights.has(milliGrams)) throw new Error('Each weight must be unique, including equivalent gram and kilogram values.')
+    if (!Number.isSafeInteger(option.priceCents) || option.priceCents < 1 || option.priceCents > 100000000) {
+      throw new Error('Each weight needs a valid positive price.')
+    }
+    ids.add(option.id)
+    weights.add(milliGrams)
+    return { id: option.id, weightValue: option.weightValue, weightUnit: option.weightUnit, priceCents: option.priceCents }
+  })
+}
+
+function formatWeightLabel(option) {
+  return `${option.weightValue} ${option.weightUnit}`
+}
+
 function priceMenuLine(menuItem, line) {
   if (!menuItem || typeof menuItem !== 'object') {
     throw new Error('A menu item is invalid. Ask a manager to review the menu.')
@@ -26,8 +57,10 @@ function priceMenuLine(menuItem, line) {
   if (!line || typeof line !== 'object') {
     throw new Error('This menu line is invalid.')
   }
+  const itemType = menuItem.itemType || 'non-weight-wise'
+  if (!['non-weight-wise', 'weight-wise'].includes(itemType)) throw new Error('This menu item type is invalid.')
   const itemPrice = typeof menuItem.priceCents === 'number' ? menuItem.priceCents : (typeof menuItem.price === 'number' ? menuItem.price : 0)
-  if (!Number.isSafeInteger(itemPrice) || itemPrice < 0) {
+  if (itemType === 'non-weight-wise' && (!Number.isSafeInteger(itemPrice) || itemPrice < 0)) {
     throw new Error('A menu price is invalid. Ask a manager to review the menu.')
   }
   const variants = Array.isArray(menuItem.variants) ? menuItem.variants : []
@@ -38,10 +71,20 @@ function priceMenuLine(menuItem, line) {
 
   const configuredVariants = variants.map((option) => validOption(option, 'priceDeltaCents', true))
   const configuredAddOns = addOns.map((option) => validOption(option, 'priceCents'))
+  const weightOptions = itemType === 'weight-wise' ? normalizeWeightOptions(menuItem.weightOptions) : []
+  if (itemType === 'weight-wise' && variants.length) throw new Error('Weight-wise items cannot also use size variants.')
   const variant = line.selectedVariantId
     ? configuredVariants.find((option) => option.id === line.selectedVariantId)
     : null
   if (line.selectedVariantId && !variant) throw new Error('A selected size or variant is no longer available.')
+
+  const selectedWeightOptionId = line.selectedWeightOptionId || ''
+  const weightOption = selectedWeightOptionId
+    ? weightOptions.find((option) => option.id === selectedWeightOptionId)
+    : null
+  if (itemType === 'weight-wise' && !weightOption) throw new Error('Choose a valid weight for this item.')
+  if (itemType !== 'weight-wise' && selectedWeightOptionId) throw new Error('This item does not use weight pricing.')
+  if (!Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 99) throw new Error('Item quantity must be between 1 and 99.')
 
   const selectedIds = Array.isArray(line.selectedAddOnIds) ? line.selectedAddOnIds : []
   if (selectedIds.length > 10 || new Set(selectedIds).size !== selectedIds.length) {
@@ -55,7 +98,7 @@ function priceMenuLine(menuItem, line) {
   const selectedVariant = variant
     ? { id: variant.id, name: variant.name, priceDeltaCents: variant.price }
     : null
-  const unitPriceCents = itemPrice
+  const unitPriceCents = (weightOption?.priceCents ?? itemPrice)
     + (selectedVariant?.priceDeltaCents || 0)
     + selectedAddOns.reduce((sum, option) => sum + option.priceCents, 0)
   if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0 || unitPriceCents > 100000000) {
@@ -68,8 +111,15 @@ function priceMenuLine(menuItem, line) {
     categoryId: menuItem.categoryId || null,
     categoryName: typeof menuItem.categoryName === 'string' ? menuItem.categoryName : '',
     unitPriceCents,
+    lineTotalCents: unitPriceCents * line.quantity,
     quantity: line.quantity,
     note: typeof line.note === 'string' ? line.note.trim().slice(0, 300) : '',
+    selectedWeight: weightOption ? {
+      id: weightOption.id,
+      value: weightOption.weightValue,
+      unit: weightOption.weightUnit,
+      label: formatWeightLabel(weightOption),
+    } : null,
     selectedVariant,
     selectedAddOns,
   }
@@ -129,6 +179,8 @@ function isSettledPaymentStatus(status) {
 }
 
 module.exports = {
+  normalizeWeightOptions,
+  formatWeightLabel,
   priceMenuLine,
   calculateRecipeNeeds,
   roundStockQuantity,

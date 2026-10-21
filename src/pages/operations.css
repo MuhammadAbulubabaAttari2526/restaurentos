@@ -840,6 +840,31 @@ body {
 	stroke-width: 2.3;
 }
 
+.weight-options-modal { display: grid; gap: 14px; }
+.weight-options-modal .option-fieldset { padding: 13px; border: 1px solid #e4ebe4; border-radius: 10px; background: #fbfcfa; }
+.weight-options-modal .option-choice { padding: 9px 10px; border: 1px solid transparent; border-radius: 8px; }
+.weight-options-modal .option-choice.is-selected { border-color: #9fc7af; background: #edf7f0; }
+.weight-portion-row { display: flex; align-items: center; justify-content: space-between; color: #35463c; font-size: 12px; font-weight: 700; }
+.weight-selection-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px; border: 1px solid #e4ebe4; border-radius: 10px; background: #f7faf6; }
+.weight-selection-summary > div { display: flex; flex-direction: column; gap: 4px; color: #79867d; font-size: 10px; }
+.weight-selection-summary strong { color: #293b31; font-size: 12px; }
+.weight-selection-summary .weight-selection-total { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: space-between; border-top: 1px solid #e0e8df; padding-top: 9px; color: #35463c; font-size: 12px; font-weight: 700; }
+.weight-selection-summary .weight-selection-total strong { color: #176344; font-size: 16px; }
+.weight-options-editor { display: grid; gap: 10px; }
+.weight-options-editor > p { margin: 0; color: #768279; font-size: 10px; line-height: 1.5; }
+.weight-option-row { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(70px, .65fr) minmax(100px, 1fr) 32px; align-items: end; gap: 8px; padding: 10px; border: 1px solid #e4e9e2; border-radius: 8px; background: #fafbf9; }
+.weight-option-row label { display: grid; gap: 5px; color: #59665d; font-size: 10px; font-weight: 600; }
+.weight-option-row input, .weight-option-row select { width: 100%; min-width: 0; height: 36px; border: 1px solid #dfe5de; border-radius: 5px; padding: 0 8px; background: #fff; color: #354238; font-size: 11px; }
+.weight-remove-button { margin-bottom: 2px; color: #a24d43; }
+.weight-add-button { justify-self: start; }
+.modal-field { display: grid; gap: 7px; color: #59665d; font-size: 10px; font-weight: 600; }
+
+@media (max-width: 480px) {
+	.weight-option-row { grid-template-columns: minmax(0, 1fr) minmax(70px, .7fr) 32px; }
+	.weight-option-row label:nth-child(3) { grid-column: 1 / 3; }
+	.weight-remove-button { grid-column: 3; grid-row: 2; }
+}
+
 .app-frame .order-toolbar {
 	display: flex;
 	align-items: center;
@@ -1400,16 +1425,12 @@ body {
 .pos-catalog-foot span:first-child { display: inline-flex; align-items: center; gap: 6px; }
 .pos-catalog-foot i { width: 6px; height: 6px; border-radius: 50%; background: #51a578; }
 
-.pos-experience .pos-ticket { position: sticky; top: 14px; display: flex; max-height: calc(100dvh - 176px); flex-direction: column; gap: 11px; min-width: 0; padding: 18px; overflow-y: auto; border: 1px solid rgb(255 255 255 / 92%); border-radius: 17px; background: linear-gradient(155deg, rgb(255 255 255 / 96%), rgb(247 250 247 / 95%)); box-shadow: 0 16px 38px rgb(27 54 38 / 10%), inset 0 1px #fff; scrollbar-color: #d7e3d9 transparent; scrollbar-width: thin; }
-.pos-experience .pos-ticket.pos-ticket-drawer { position: fixed; z-index: 81; top: 14px; right: 14px; bottom: 14px; display: flex; width: min(460px, calc(100vw - 28px)); max-height: none; min-height: 0; flex-direction: column; padding: 19px; overflow-y: auto; border: 1px solid rgb(255 255 255 / 92%); border-radius: 18px; background: linear-gradient(155deg, rgb(255 255 255 / 98%), rgb(247 250 247 / 98%)); box-shadow: 0 24px 80px rgb(12 31 20 / 28%), inset 0 1px #fff; animation: pos-ticket-enter 230ms cubic-bezier(.2, .75, .25, 1) both; }
-.pos-experience .pos-ticket.pos-ticket-drawer { overflow-y: visible; }
-.pos-ticket-close { position: absolute; z-index: 1; top: 14px; right: 14px; display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid #e3ebe4; border-radius: 10px; background: #fff; color: #62786a; cursor: pointer; }
-.pos-ticket-close:hover { border-color: #cbdccf; background: #f3f8f4; color: #255c42; }
-.pos-experience .pos-ticket-drawer .pos-ticket-heading { padding-right: 40px; }
-.pos-open-ticket { position: fixed; z-index: 60; right: 24px; bottom: 24px; display: flex; min-height: 54px; align-items: center; gap: 10px; padding: 9px 15px; border: 1px solid #1f563e; border-radius: 14px; background: linear-gradient(135deg, #2c7453, #1d503b); color: #fff; box-shadow: 0 12px 28px rgb(24 71 48 / 26%); cursor: pointer; }
-.pos-open-ticket > span { font-size: 12px; font-weight: 800; }
-.pos-open-ticket > strong { padding-left: 9px; border-left: 1px solid rgb(255 255 255 / 25%); color: rgb(242 249 243 / 86%); font-size: 10px; font-weight: 650; }
-.pos-open-ticket:hover { transform: translateY(-2px); box-shadow: 0 15px 32px rgb(24 71 48 / 32%); }
+.pos-experience .pos-ticket { display: flex; flex-direction: column; gap: 11px; min-width: 0; padding: 18px; overflow-y: auto; border: 1px solid rgb(255 255 255 / 92%); border-radius: 17px; background: linear-gradient(155deg, rgb(255 255 255 / 96%), rgb(247 250 247 / 95%)); box-shadow: 0 16px 38px rgb(27 54 38 / 10%), inset 0 1px #fff; scrollbar-color: #d7e3d9 transparent; scrollbar-width: thin; }
+.pos-experience .pos-ticket.pos-ticket-drawer { display: flex; flex-direction: column; min-height: 0; }
+.pos-ticket-close { display: none; }
+.pos-ticket-backdrop { display: none; }
+.pos-open-ticket { display: none; }
+.pos-experience .pos-ticket-drawer .pos-ticket-heading { padding-right: 0; }
 .pos-ticket-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .pos-ticket-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .pos-ticket-icon { display: grid; width: 37px; height: 37px; flex: none; place-items: center; border: 1px solid #d9e8de; border-radius: 12px; background: linear-gradient(145deg, #f2f8f3, #e8f1e9); color: #397459; }
@@ -1447,7 +1468,7 @@ body {
 .pos-experience .pos-ticket .draft-toolbar select { min-width: 0; min-height: 36px; height: 36px; padding: 0 8px; border: 1px solid #e0e8e1; border-radius: 8px; background: #fff; color: #31473b; font-size: 10px; }
 .pos-experience .pos-ticket .draft-toolbar .button { min-height: 36px; height: 36px; padding: 0 9px; border-radius: 7px; font-size: 10px; }
 .pos-cart-list { display: grid; min-height: 82px; max-height: 206px; gap: 0; overflow-y: auto; border-top: 1px solid #ebf0eb; border-bottom: 1px solid #ebf0eb; scrollbar-color: #d7e3d9 transparent; scrollbar-width: thin; }
-.pos-experience .pos-ticket .pos-cart-list { max-height: none; overflow: visible; }
+.pos-experience .pos-ticket .pos-cart-list { max-height: min(36dvh, 260px); overflow-y: auto; overscroll-behavior: contain; }
 .pos-cart-item { padding: 10px 1px; border-bottom: 1px solid #edf1ed; }
 .pos-cart-item:last-child { border-bottom: 0; }
 .pos-cart-item-main { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
@@ -1522,139 +1543,196 @@ body {
 
 @media (max-width: 1100px) {
 	.pos-hero { align-items: flex-start; }
-	.pos-experience .pos-workbench { grid-template-columns: minmax(0, 1fr); gap: 15px; }
-	.pos-experience .pos-ticket { padding: 14px; }
 }
 
-@media (max-width: 980px) {
-	.pos-experience .pos-workbench { grid-template-columns: minmax(0, 1fr); }
-	.pos-experience .pos-ticket { position: static; max-height: none; }
-	.pos-product-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-	.pos-cart-list { max-height: 280px; }
+/* ─── POS Responsive Layout ────────────────────────────────────────────── */
+
+/* Desktop layout (>= 901px): Two columns side-by-side */
+@media (min-width: 901px) {
+	.pos-experience .pos-workbench {
+		display: grid !important;
+		grid-template-columns: minmax(0, 1fr) minmax(340px, 390px) !important;
+		gap: 20px !important;
+		align-items: start !important;
+		padding-right: 0 !important;
+	}
+
+	.pos-experience .pos-ticket.pos-ticket-drawer {
+		position: sticky !important;
+		top: 14px !important;
+		right: auto !important;
+		bottom: auto !important;
+		left: auto !important;
+		width: 100% !important;
+		max-height: calc(100dvh - 80px) !important;
+		overflow-y: auto !important;
+		align-self: start !important;
+		box-shadow: 0 16px 38px rgb(27 54 38 / 10%), inset 0 1px #fff !important;
+		animation: none !important;
+	}
+
+	.pos-ticket-close,
+	.pos-ticket-backdrop,
+	.pos-open-ticket {
+		display: none !important;
+	}
+}
+
+/* Mobile & Tablet layout (<= 900px): Clean catalog + Floating ticket bar + Slide-in drawer */
+@media (max-width: 900px) {
+	.pos-experience .pos-workbench {
+		display: block !important;
+		width: 100% !important;
+	}
+
+	.pos-experience .pos-menu-browser {
+		width: 100% !important;
+		padding-bottom: 96px !important; /* Space for the floating button */
+	}
+
+	/* Hidden when closed on mobile */
+	.pos-experience .pos-ticket.pos-ticket-drawer:not(.is-open) {
+		display: none !important;
+	}
+
+	/* Open drawer on mobile */
+	.pos-experience .pos-ticket.pos-ticket-drawer.is-open {
+		display: flex !important;
+		position: fixed !important;
+		z-index: 100 !important;
+		top: 0 !important;
+		right: 0 !important;
+		bottom: 0 !important;
+		width: min(460px, 100vw) !important;
+		max-width: 100vw !important;
+		height: 100dvh !important;
+		max-height: 100dvh !important;
+		border-radius: 0 !important;
+		border-left: 1px solid rgba(255, 255, 255, 0.4) !important;
+		padding: 20px 16px 36px !important;
+		background: #ffffff !important;
+		box-shadow: -14px 0 50px rgba(0, 0, 0, 0.35) !important;
+		overflow-y: auto !important;
+		-webkit-overflow-scrolling: touch !important;
+		animation: posDrawerSlide 240ms cubic-bezier(0.16, 1, 0.3, 1) both !important;
+	}
+
+	.pos-ticket-backdrop {
+		display: block !important;
+		position: fixed !important;
+		inset: 0 !important;
+		z-index: 95 !important;
+		background: rgba(12, 28, 20, 0.58) !important;
+		backdrop-filter: blur(4px) !important;
+		animation: posFadeIn 200ms ease both !important;
+	}
+
+	.pos-ticket-close {
+		display: grid !important;
+		position: absolute !important;
+		top: 14px !important;
+		right: 14px !important;
+		z-index: 10 !important;
+		width: 36px !important;
+		height: 36px !important;
+		place-items: center !important;
+		border: 1px solid #dbe5dc !important;
+		border-radius: 10px !important;
+		background: #f1f6f2 !important;
+		color: #2b5741 !important;
+		cursor: pointer !important;
+	}
+
+	.pos-experience .pos-ticket-drawer .pos-ticket-heading {
+		padding-right: 44px !important;
+	}
+
+	/* Floating checkout bar at bottom */
+	.pos-open-ticket {
+		display: flex !important;
+		position: fixed !important;
+		z-index: 85 !important;
+		bottom: 16px !important;
+		left: 14px !important;
+		right: 14px !important;
+		max-width: 520px !important;
+		margin: 0 auto !important;
+		min-height: 54px !important;
+		height: 54px !important;
+		align-items: center !important;
+		justify-content: space-between !important;
+		padding: 0 16px !important;
+		border: 1px solid #1a563b !important;
+		border-radius: 15px !important;
+		background: linear-gradient(135deg, #256d4c 0%, #174c34 100%) !important;
+		color: #ffffff !important;
+		box-shadow: 0 10px 28px rgba(18, 62, 43, 0.35) !important;
+		cursor: pointer !important;
+		animation: posBarSlideUp 260ms cubic-bezier(0.16, 1, 0.3, 1) both !important;
+	}
+
+	.pos-open-ticket-main {
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		font-size: 13px;
+		font-weight: 750;
+	}
+
+	.pos-open-ticket-total {
+		font-size: 13px;
+		font-weight: 800;
+		font-variant-numeric: tabular-nums;
+		padding-left: 10px;
+		border-left: 1px solid rgba(255, 255, 255, 0.28);
+	}
+
+	.pos-product-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+		gap: 10px !important;
+	}
+	.pos-product-photo { height: 120px !important; }
+	.pos-product-info { min-height: 110px !important; padding: 9px 10px !important; }
 }
 
 @media (max-width: 640px) {
-	.pos-hero { flex-direction: column; gap: 13px; margin-bottom: 16px; padding-bottom: 14px; }
-	.pos-experience .pos-hero h1 { font-size: clamp(30px, 8vw, 36px); }
+	.pos-hero { flex-direction: column; gap: 11px; margin-bottom: 14px; padding-bottom: 12px; }
+	.pos-experience .pos-hero h1 { font-size: clamp(26px, 7vw, 32px); }
 	.pos-hero-meta { width: 100%; justify-content: space-between; }
-	.pos-shortcut { font-size: 9px; }
-	.pos-catalog-head { align-items: stretch; flex-direction: column; gap: 11px; }
+	.pos-catalog-head { align-items: stretch; flex-direction: column; gap: 10px; }
 	.pos-search { width: 100%; }
-	.pos-category-row { margin-bottom: 12px; }
-	.pos-product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-	.pos-product-photo { height: 112px; }
-	.pos-product-info { min-height: 115px; padding: 9px 10px 10px; }
-	.pos-product-info > strong { font-size: 11px; }
-	.pos-product-price { font-size: 12px; }
-	.pos-catalog-foot { flex-direction: column; gap: 5px; }
-	.pos-experience .pos-ticket { gap: 10px; padding: 13px; }
-	.pos-cart-list { max-height: 240px; }
-	.pos-ticket-close { top: 10px; right: 10px; }
-	.pos-open-ticket { right: 14px; bottom: 14px; left: 14px; justify-content: center; }
-}
-
-@media (max-height: 650px) and (min-width: 981px) {
-	.pos-hero { margin-bottom: 15px; padding-bottom: 13px; }
-	.pos-experience .pos-ticket { max-height: calc(100dvh - 162px); gap: 9px; padding: 13px; }
-	.pos-cart-list { max-height: 150px; }
+	.pos-category-row { margin-bottom: 10px; }
+	.pos-product-photo { height: 110px !important; }
 }
 
 @media (max-width: 380px) {
-	.pos-product-grid { grid-template-columns: minmax(0, 1fr); }
-	.pos-product-photo { height: 150px; }
-	.pos-product-info { min-height: 110px; }
+	.pos-product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 7px !important; }
+	.pos-product-photo { height: 95px !important; }
+	.pos-product-info { min-height: 100px !important; padding: 7px 8px !important; }
+	.pos-product-info > strong { font-size: 10.5px !important; }
+	.pos-product-price { font-size: 11px !important; }
 	.pos-order-types button span { font-size: 7px; }
 	.pos-guest-fields { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* Keep the order ticket beside the menu so it never covers the search or dishes. */
-@media (min-width: 721px) {
-	.pos-experience .pos-workbench.ticket-open {
-		grid-template-columns: minmax(0, 1fr) minmax(320px, min(37vw, 390px));
-		align-items: start;
-		gap: 18px;
-		padding-right: 0;
-	}
-
-	.pos-experience .pos-ticket.pos-ticket-drawer {
-		position: sticky;
-		top: 14px;
-		right: auto;
-		bottom: auto;
-		left: auto;
-		width: auto;
-		max-height: none;
-		overflow-y: visible;
-		align-self: start;
-	}
-
-	.pos-experience .pos-workbench.ticket-open .pos-catalog-head {
-		align-items: stretch;
-		flex-direction: column;
-		gap: 11px;
-	}
-
-	.pos-experience .pos-workbench.ticket-open .pos-search { width: 100%; }
-	.pos-experience .pos-workbench.ticket-open .pos-product-grid { grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); }
+@keyframes posDrawerSlide {
+	from { transform: translateX(100%); opacity: 0.6; }
+	to { transform: translateX(0); opacity: 1; }
 }
 
-@media (min-width: 721px) and (max-width: 980px) {
-	.pos-experience .pos-workbench.ticket-open {
-		grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
-		gap: 14px;
-	}
+@keyframes posFadeIn {
+	from { opacity: 0; }
+	to { opacity: 1; }
 }
 
-@media (max-width: 720px) {
-	.pos-experience .pos-workbench.ticket-open {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr);
-		gap: 14px;
-		padding-right: 0;
-	}
-
-	.pos-experience .pos-workbench.ticket-open .pos-ticket.pos-ticket-drawer {
-		position: relative;
-		z-index: auto;
-		top: auto;
-		right: auto;
-		bottom: auto;
-		left: auto;
-		grid-row: 1;
-		width: 100%;
-		height: auto;
-		max-height: none;
-		max-width: none;
-		overflow-y: visible;
-		align-self: start;
-		animation: pos-ticket-stack-enter 180ms ease-out both;
-	}
-
-	.pos-experience .pos-workbench.ticket-open .pos-menu-browser {
-		grid-row: 2;
-	}
-
-	.pos-experience .pos-workbench.ticket-open .pos-catalog-head {
-		align-items: stretch;
-		flex-direction: column;
-		gap: 11px;
-	}
-
-	.pos-experience .pos-workbench.ticket-open .pos-search { width: 100%; }
+@keyframes posBarSlideUp {
+	from { transform: translateY(30px); opacity: 0; }
+	to { transform: translateY(0); opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
 	.pos-product-card, .pos-product-photo > img, .pos-category-row button, .pos-checkout-button, .pos-open-ticket { transition: none; }
-	.pos-ticket-drawer { animation: none; }
-	.pos-experience .pos-workbench.ticket-open .pos-ticket.pos-ticket-drawer { animation: none; }
-}
-
-@keyframes pos-ticket-enter {
-	from { opacity: .65; transform: translateX(calc(100% + 22px)); }
-	to { opacity: 1; transform: translateX(0); }
-}
-
-@keyframes pos-ticket-stack-enter {
-	from { opacity: .7; transform: translateY(-8px); }
-	to { opacity: 1; transform: translateY(0); }
+	.pos-ticket-drawer { animation: none !important; }
+	.pos-ticket-backdrop { animation: none !important; }
+	.pos-open-ticket { animation: none !important; }
 }

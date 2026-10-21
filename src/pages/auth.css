@@ -725,3 +725,36 @@
     font-size: 46px;
   }
 }
+
+/* ─── Logo image branding ────────────────────────────────────────────────── */
+
+img.brand-mark {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  border-radius: 9px;
+  display: block;
+  flex: none;
+}
+
+.login-brand img.brand-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  box-shadow: 0 7px 18px rgba(36, 118, 90, 0.15);
+  transition: transform 240ms ease, box-shadow 240ms ease;
+}
+
+.login-brand:hover img.brand-mark {
+  transform: translateY(-2px) rotate(-5deg);
+  box-shadow: 0 10px 22px rgba(36, 118, 90, 0.22);
+}
+
+.art-stamp-logo {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}

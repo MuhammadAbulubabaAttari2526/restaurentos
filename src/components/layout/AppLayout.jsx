@@ -8,6 +8,7 @@ import {
 import { useAuth } from '../../context/useAuth.js'
 import { useSync } from '../../hooks/useSync.js'
 import { watchRecords } from '../../services/data.js'
+import { publicAssetUrl } from '../../utils/publicAssetUrl.js'
 
 const links = [
   { label: 'Overview', path: '/dashboard', icon: LayoutDashboard, roles: ['owner', 'manager'] },
@@ -32,6 +33,7 @@ pageNames['/pos-window'] = 'Point of sale'
 const copyrightYear = new Date().getFullYear()
 
 export function AppLayout({ children }) {
+  const logoUrl = publicAssetUrl('logo.jpg')
   const { user, membership, logout } = useAuth()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [restaurantName, setRestaurantName] = useState('')
@@ -172,8 +174,8 @@ export function AppLayout({ children }) {
       <aside ref={sidebarRef} id="workspace-navigation" aria-label="Workspace navigation" role={drawerOpen ? 'dialog' : undefined} aria-modal={drawerOpen ? 'true' : undefined} className={`sidebar ${drawerOpen ? 'sidebar-open' : ''}`}>
         <div className="brand-lockup">
           <Link to={homePath} className="brand-home-link" aria-label="RestaurantOS home" onClick={closeDrawer}>
-            <span className="brand-mark"><Utensils size={19} /></span>
-            <span className="brand-home-copy"><strong>RestaurantOS</strong><span>Operations</span></span>
+            <img className="brand-mark" src={logoUrl} alt="RestaurantOS" />
+            <span className="brand-home-copy"><strong>RestaurantOS</strong><span>Smart · Fast · Complete</span></span>
           </Link>
           <button ref={closeButtonRef} className="icon-button sidebar-close" aria-label="Close navigation" onClick={closeDrawer}><X size={19} /></button>
         </div>
