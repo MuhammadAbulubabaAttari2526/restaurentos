@@ -9,7 +9,7 @@ import './auth.css'
 
 export function JoinPage() {
   const { restaurantId, invitationId } = useParams()
-  const logoUrl = publicAssetUrl('logo.jpg')
+  const logoUrl = publicAssetUrl('restaurantos-mark.png')
   const { user, membership, login, joinInvitation, refreshMembership, logout } = useAuth()
   const navigate = useNavigate()
   const [invitation, setInvitation] = useState(null)

@@ -188,7 +188,7 @@ body { color: var(--ink); background: var(--canvas); }
 .app-frame .sidebar { width: 292px; padding: 22px 15px 16px; color: #edf4ee; background: #1d3d31; border-right: 1px solid #315346; }
 .app-frame .brand-lockup strong { color: #f5f7f2; font-size: 14px; }
 .app-frame .brand-lockup span { color: #b3c7ba; font-size: 11px; }
-.app-frame .brand-mark { color: #243c2f; background: #e2bd70; border-radius: 8px; }
+.app-frame .brand-mark { color: #243c2f; background: #fff; border: 2px solid #d9efdf; border-radius: 50%; }
 .app-frame .restaurant-picker { min-height: 58px; border-color: #456354; border-radius: 7px; background: #294b3c; }
 .app-frame .restaurant-avatar { color: #47391d; background: #e4c67f; }
 .app-frame .restaurant-label strong { color: #f3f6f1; font-size: 12px; }
@@ -198,6 +198,8 @@ body { color: var(--ink); background: var(--canvas); }
 .app-frame .nav-link { min-height: 42px; height: auto; border-radius: 6px; color: #ccdad0; font-size: 12px; transition: color 150ms ease, background 150ms ease; }
 .app-frame .nav-link:hover { color: #fff; background: #ffffff12; }
 .app-frame .nav-link.nav-active { color: #1d4735; background: #f1f4ef; box-shadow: inset 3px 0 #e0b968; }
+.app-frame .history-nav-link { width: 100%; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.app-frame .history-nav-link:hover { color: #fff; background: #ffffff12; }
 .app-frame .sidebar-bottom { border-color: #456354; }
 .app-frame .help-panel { color: #edf4ee; border-color: #456354; background: #294b3c; }
 .app-frame .help-panel span, .app-frame .profile-details span { color: #bfd0c4; }
@@ -368,6 +370,17 @@ body {
 }
 
 .app-frame .order-details-dialog { width: min(100%, 620px); }
+.app-frame .order-history-dialog { width: min(100%, 900px); max-height: min(84vh, 760px); overflow: auto; }
+.app-frame .order-history-intro { margin: -5px 0 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.app-frame .order-history-search { max-width: 480px; margin-bottom: 14px; }
+.app-frame .order-history-tabs { display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+.app-frame .order-history-tabs button { padding: 9px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.app-frame .order-history-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
+.app-frame .order-history-table-wrap { min-height: 150px; }
+.app-frame .order-history-table-wrap .table-scroll { max-height: 48vh; overflow: auto; }
+.app-frame .order-history-state { display: grid; min-height: 140px; place-items: center; margin: 0; color: var(--muted); font-size: 12px; }
+.app-frame .order-history-limit { margin: 10px 0 0; color: var(--muted); font-size: 10px; }
+.app-frame .order-history-dialog .modal-actions { margin-top: 12px; }
 .order-details-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
 .order-details-meta > div { display: grid; align-content: start; gap: 6px; min-width: 0; }
 .order-details-meta > div > span, .order-details-list-heading > span, .order-details-totals > div > span { color: var(--muted); font-size: 11px; }
@@ -1822,9 +1835,12 @@ body {
 	width: 38px;
 	height: 38px;
 	flex: none;
-	border-radius: 10px;
-	object-fit: cover;
-	box-shadow: 0 3px 9px rgb(21 67 47 / 12%);
+	padding: 2px;
+	border: 2px solid #d9efdf;
+	border-radius: 50%;
+	background: #fff;
+	object-fit: contain;
+	box-shadow: 0 4px 12px rgb(21 67 47 / 10%);
 }
 
 .pos-storefront-brand > span { display: grid; min-width: 0; gap: 2px; }

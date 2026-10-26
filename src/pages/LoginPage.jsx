@@ -3,14 +3,13 @@ import { Link } from 'react-router-dom'
 import {
   ArrowRight,
   ChartNoAxesColumnIncreasing,
-  ChefHat,
   ClipboardList,
   Eye,
   EyeOff,
-  FlaskConical,
   LockKeyhole,
   Mail,
   Table2,
+  UsersRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import './auth.css'
@@ -19,10 +18,10 @@ import { friendlyError } from '../utils/domain.js'
 import { publicAssetUrl } from '../utils/publicAssetUrl.js'
 
 const loginFeatures = [
-  { icon: ClipboardList, title: 'POS & Billing', detail: 'Fast & reliable' },
-  { icon: Table2, title: 'Table Management', detail: 'Dine in / takeout' },
-  { icon: ChefHat, title: 'Inventory', detail: 'Track in real time' },
-  { icon: ChartNoAxesColumnIncreasing, title: 'Reports & Analytics', detail: 'Grow smarter' },
+  { icon: ClipboardList, title: 'POS & Billing', detail: 'Fast, accurate transactions' },
+  { icon: Table2, title: 'Table Management', detail: 'A better guest flow' },
+  { icon: ChartNoAxesColumnIncreasing, title: 'Inventory Control', detail: 'Track stock in real time' },
+  { icon: UsersRound, title: 'Staff Management', detail: 'Keep your team in sync' },
 ]
 
 export function LoginPage() {
@@ -31,7 +30,7 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [busy, setBusy] = useState(false)
-  const logoUrl = publicAssetUrl('logo.jpg')
+  const logoUrl = publicAssetUrl('restaurantos-mark.png')
 
   async function submit(event) {
     event.preventDefault()
@@ -47,19 +46,30 @@ export function LoginPage() {
 
   return (
     <main className="login-screen auth-login-screen">
-      <section className="login-art" aria-label="RestaurantOS restaurant management overview">
+      <header className="login-topbar">
         <Link to="/" className="login-hero-brand" aria-label="RestaurantOS home">
           <img src={logoUrl} alt="" />
-          <span><strong>RestaurantOS</strong><small>SMART <i>·</i> FAST <i>·</i> COMPLETE</small></span>
+          <span><strong>RestaurantOS</strong></span>
         </Link>
+        <nav aria-label="Page navigation">
+          <a href="#overview" aria-current="page">Home</a>
+          <a href="#features">Features</a>
+          <a href="#about">About</a>
+          <a href="#contact">Contact</a>
+        </nav>
+        <button className="login-topbar-cta" type="button" onClick={enterDemo}>
+          Explore sample <ArrowRight size={16} />
+        </button>
+      </header>
 
+      <section className="login-art" aria-label="RestaurantOS restaurant management overview">
         <div className="login-hero-content">
-          <div className="login-hero-copy">
-            <p className="login-hero-eyebrow">HOSPITALITY, IN RHYTHM</p>
+          <div className="login-hero-copy" id="overview">
+            <p className="login-hero-eyebrow">SMART POS FOR MODERN RESTAURANTS</p>
             <h2>Your whole<br /><em>restaurant,</em><br />working as one.</h2>
-            <p className="login-hero-description">Manage orders, tables, inventory, staff and more — all in one simple, powerful system.</p>
+            <p className="login-hero-description" id="about">From the first order to end-of-day reports, keep your team, tables and stock moving together in one simple system.</p>
 
-            <div className="login-feature-grid">
+            <div className="login-feature-grid" id="features">
               {loginFeatures.map(({ icon: Icon, title, detail }) => (
                 <div className="login-feature" key={title}>
                   <span className="login-feature-icon"><Icon size={19} strokeWidth={1.8} /></span>
@@ -67,42 +77,23 @@ export function LoginPage() {
                 </div>
               ))}
             </div>
-          </div>
-
-          <div className="login-hero-visual" aria-hidden="true">
-            <p className="login-hero-script">Simple. Smart. Complete.</p>
-            <div className="login-float-card login-float-chef"><ChefHat size={27} /></div>
-            <div className="login-float-card login-float-chart"><ChartNoAxesColumnIncreasing size={28} /></div>
-            <div className="login-device">
-              <div className="login-device-top"><span className="login-device-brand"><i /> Restaurant</span><span>◦ &nbsp; ◦ &nbsp; ◦</span></div>
-              <div className="login-device-body">
-                <div className="login-device-nav"><i /><i /><i /><i /><i /></div>
-                <div className="login-device-menu">
-                  <div className="login-device-tabs"><b>All</b><span>Food</span><span>Drinks</span></div>
-                  <div className="login-device-dishes">
-                    <i /><i /><i /><i /><i /><i />
-                  </div>
-                  <div className="login-device-lines"><i /><i /><i /></div>
-                </div>
-                <div className="login-device-ticket"><b>New order</b><i /><i /><i /><span>Total <strong>Rs. 2,850</strong></span><small>Checkout&nbsp; →</small></div>
-              </div>
-            </div>
-            <div className="login-device-glow" />
+            <button className="login-hero-demo" type="button" onClick={enterDemo}>
+              Explore sample workspace <ArrowRight size={17} />
+            </button>
           </div>
         </div>
-
-        <p className="login-hero-footer">Good food.<br /><em>Better business.</em></p>
+        <p className="login-hero-footer">Good food. <em>Better business.</em></p>
       </section>
 
-      <section className="login-panel">
+      <section className="login-panel" id="sign-in">
         <Link to="/" className="login-brand" aria-label="RestaurantOS home">
           <img className="brand-mark" src={logoUrl} alt="" />
           <strong>RestaurantOS</strong>
         </Link>
         <div className="login-copy">
           <p className="eyebrow">SIGN IN</p>
-          <h1>Welcome<br />back.</h1>
-          <p>Sign in to your owner or team account.</p>
+          <h1>Welcome <em>back.</em></h1>
+          <p>Sign in to your account to continue to your restaurant dashboard.</p>
         </div>
         <form className="login-form" onSubmit={submit}>
           <label>Email address
@@ -118,11 +109,11 @@ export function LoginPage() {
 
         <p className="login-reset-copy">Forgot your password? <span>Contact your restaurant owner.</span></p>
         <div className="login-demo-divider"><span />OR<span /></div>
-        <div className="demo-entry">
-          <button className="button button-subtle" type="button" onClick={enterDemo}><FlaskConical size={17} />Open sample workspace</button>
-          <small>Uses sample data only. Changes reset when you leave this session.</small>
-        </div>
-        <div className="login-footnote">Restaurant owners are provisioned by an authorized administrator. Team members join with their invitation link.</div>
+        <button className="login-sample-link" type="button" onClick={enterDemo}>
+          Open sample workspace
+        </button>
+        <p className="login-sample-note">Sample data only. Changes reset when you leave.</p>
+        <div className="login-footnote" id="contact"><strong>Need access?</strong> Restaurant owners are set up by an authorized administrator. Team members can join with an invitation link from their owner.</div>
       </section>
     </main>
   )

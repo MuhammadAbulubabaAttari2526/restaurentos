@@ -16,7 +16,7 @@ function money(cents, currency) {
 }
 
 export function ReceiptDialog({ order, restaurantName = 'Restaurant', currency = 'PKR', onClose }) {
-  const logoUrl = publicAssetUrl('logo.jpg')
+  const logoUrl = publicAssetUrl('restaurantos-mark.png')
   const currencyCode = normalizeCurrency(currency)
   const lines = order.items || []
   const totalCents = Number(order.totalCents || 0)
@@ -35,7 +35,7 @@ export function ReceiptDialog({ order, restaurantName = 'Restaurant', currency =
 
         <article className="receipt-paper">
           <header className="receipt-header">
-            <div className="receipt-brand-mark"><img src={logoUrl} alt="RestaurantOS" style={{ width: 36, height: 36, borderRadius: 8, objectFit: 'cover' }} /></div>
+            <div className="receipt-brand-mark"><img src={logoUrl} alt="RestaurantOS" style={{ width: 48, height: 48, padding: 2, border: '2px solid #d9efdf', borderRadius: '50%', background: '#fff', objectFit: 'contain' }} /></div>
             <p className="receipt-kicker">THANK YOU FOR VISITING</p>
             <h1>{restaurantName}</h1>
             <p className="receipt-subtitle">We hope to see you again soon.</p>

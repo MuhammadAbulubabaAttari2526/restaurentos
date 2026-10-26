@@ -56,6 +56,18 @@ describe('authentication routes', () => {
     expect(await screen.findByText('Cedar & Sage')).toBeInTheDocument()
   })
 
+  it('opens order and payment history from the sidebar', async () => {
+    activateDemoSession()
+    renderApp('/dashboard')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'History' }))
+    const dialog = await screen.findByRole('dialog', { name: /order history/i })
+    expect(await within(dialog).findByText('R-20261001-0012')).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Payments' }))
+    expect(await within(dialog).findByText('cash')).toBeInTheDocument()
+  })
+
   it('opens the POS in a dedicated Electron window instead of reusing the main app shell', async () => {
     activateDemoSession()
     const openPosWindow = vi.fn()

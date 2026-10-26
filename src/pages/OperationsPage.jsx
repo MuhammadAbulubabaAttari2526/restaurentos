@@ -578,7 +578,7 @@ function PosPage() {
   return <div className={`pos-page pos-experience${standalonePosWindow ? ' pos-standalone' : ''}`} onKeyDown={handlePosKeyDown}>
     {standalonePosWindow && <header className="pos-storefront-header">
       <div className="pos-storefront-brand">
-        <img src={publicAssetUrl('logo.jpg')} alt="" />
+        <img src={publicAssetUrl('restaurantos-mark.png')} alt="" />
         <span><strong>RestaurantOS</strong><small>Smart · Fast · Complete</small></span>
       </div>
       <label className="pos-search pos-storefront-search"><Search size={18} /><input ref={searchRef} aria-label="Search menu" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); addHighlightedItem() } }} placeholder="Search items, categories..." />{search && <button type="button" aria-label="Clear search" onClick={() => setSearch('')}><X size={16} /></button>}<kbd>Ctrl + K</kbd></label>

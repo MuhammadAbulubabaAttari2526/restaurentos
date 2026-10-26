@@ -5,7 +5,7 @@ import { publicAssetUrl } from '../utils/publicAssetUrl.js'
 
 export function SignupPage() {
   const { user, membership, logout } = useAuth()
-  const logoUrl = publicAssetUrl('logo.jpg')
+  const logoUrl = publicAssetUrl('restaurantos-mark.png')
   const home = {
     owner: '/dashboard', manager: '/dashboard', cashier: '/pos', waiter: '/pos',
   }[membership?.role]

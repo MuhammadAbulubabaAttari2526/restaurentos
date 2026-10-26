@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$logoPath = Join-Path $projectRoot 'public\logo.jpg'
+$logoPath = Join-Path $projectRoot 'public\restaurantos-mark.png'
 $pngPath = Join-Path $projectRoot 'electron\assets\app-icon.png'
 $icoPath = Join-Path $projectRoot 'build\icon.ico'
 
@@ -19,21 +19,14 @@ $canvas = [System.Drawing.Bitmap]::new(512, 512, [System.Drawing.Imaging.PixelFo
 $graphics = [System.Drawing.Graphics]::FromImage($canvas)
 
 try {
-  $graphics.Clear([System.Drawing.Color]::White)
+  $graphics.Clear([System.Drawing.Color]::Transparent)
   $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
   $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
   $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 
-  # Keep the recognizable RestaurantOS mark and leave the wordmark out of the
-  # square icon so it remains clear at Windows taskbar sizes.
-  $crop = [System.Drawing.Rectangle]::new(
-    [int]($source.Width * 0.3125),
-    [int]($source.Height * 0.15625),
-    [int]($source.Width * 0.40625),
-    [int]($source.Height * 0.453125)
-  )
-  $destination = [System.Drawing.Rectangle]::new(26, 0, 460, 512)
-  $graphics.DrawImage($source, $destination, $crop, [System.Drawing.GraphicsUnit]::Pixel)
+  $destination = [System.Drawing.Rectangle]::new(0, 0, 512, 512)
+  $sourceBounds = [System.Drawing.Rectangle]::new(0, 0, $source.Width, $source.Height)
+  $graphics.DrawImage($source, $destination, $sourceBounds, [System.Drawing.GraphicsUnit]::Pixel)
   $canvas.Save($pngPath, [System.Drawing.Imaging.ImageFormat]::Png)
 } finally {
   $graphics.Dispose()

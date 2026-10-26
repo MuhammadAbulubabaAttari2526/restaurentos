@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, NavLink, useLocation } from 'react-router-dom'
 import {
   BarChart3, ClipboardList, CreditCard, LayoutDashboard,
@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../../context/useAuth.js'
 import { useSync } from '../../hooks/useSync.js'
+import { OrderHistoryDialog } from '../OrderHistoryDialog.jsx'
 import { watchRecords } from '../../services/data.js'
 import { publicAssetUrl } from '../../utils/publicAssetUrl.js'
 
@@ -33,9 +34,10 @@ pageNames['/pos-window'] = 'Point of sale'
 const copyrightYear = new Date().getFullYear()
 
 export function AppLayout({ children }) {
-  const logoUrl = publicAssetUrl('logo.jpg')
+  const logoUrl = publicAssetUrl('restaurantos-mark.png')
   const { user, membership, logout } = useAuth()
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [restaurantName, setRestaurantName] = useState('')
   const [appVersion, setAppVersion] = useState('')
   const syncState = useSync()
@@ -45,11 +47,14 @@ export function AppLayout({ children }) {
   const visibleLinks = links.filter((link) => link.roles.includes(role))
   const menuButtonRef = useRef(null)
   const closeButtonRef = useRef(null)
+  const historyButtonRef = useRef(null)
   const sidebarRef = useRef(null)
   const navRef = useRef(null)
   const pageContentRef = useRef(null)
   const [navHighlight, setNavHighlight] = useState({ top: 0, height: 0, visible: false })
   const homePath = ['cashier', 'waiter'].includes(role) ? '/pos' : '/dashboard'
+  const canSeePayments = ['owner', 'manager', 'cashier'].includes(role)
+  const closeHistory = useCallback(() => setHistoryOpen(false), [])
 
   useLayoutEffect(() => {
     const nav = navRef.current
@@ -232,6 +237,19 @@ export function AppLayout({ children }) {
               <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
             </NavLink>
           ))}
+          <button
+            ref={historyButtonRef}
+            type="button"
+            className="nav-link history-nav-link"
+            aria-haspopup="dialog"
+            aria-expanded={historyOpen}
+            onClick={() => {
+              closeDrawer()
+              setHistoryOpen(true)
+            }}
+          >
+            <History size={18} strokeWidth={1.8} /><span>History</span>
+          </button>
         </nav>
         <div className="sidebar-bottom">
           <button className="profile-row" onClick={logout}>
@@ -283,6 +301,12 @@ export function AppLayout({ children }) {
           </nav>
         </footer>
       </div>
+      {historyOpen && <OrderHistoryDialog
+        restaurantId={membership?.restaurantId}
+        canSeePayments={canSeePayments}
+        onClose={closeHistory}
+        triggerRef={historyButtonRef}
+      />}
     </div>
   )
 }

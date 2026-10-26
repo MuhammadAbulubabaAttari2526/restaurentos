@@ -114,10 +114,11 @@ textarea {
 .app-frame .brand-mark {
   width: 34px;
   height: 34px;
+  object-fit: contain;
   color: #243d34;
-  background: linear-gradient(135deg, #f2dfb0 0%, #d7b36c 100%);
-  border-radius: 8px;
-  box-shadow: 0 8px 16px rgba(215, 179, 108, 0.22);
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .app-frame .restaurant-picker {
@@ -872,11 +873,12 @@ textarea {
 .app-frame .brand-mark {
   width: 42px;
   height: 42px;
-  padding: 2px;
-  border: 1px solid #ffffffde;
-  border-radius: 14px;
+  object-fit: contain;
+  padding: 0;
+  border: 2px solid #d9efdf;
+  border-radius: 50%;
   background: #fff;
-  box-shadow: 0 8px 20px #001c1460;
+  box-shadow: 0 5px 14px #001c1430;
 }
 
 .app-frame .brand-home-copy strong {
