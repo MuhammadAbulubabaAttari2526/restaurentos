@@ -53,7 +53,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json
           git commit -m "chore: bump Windows desktop release version"
-          git push origin HEAD:main
+          $attempt = 0
+          do {
+            git push origin HEAD:main
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            $attempt++
+            if ($attempt -lt 3) { Start-Sleep -Seconds (5 * $attempt) }
+          } while ($attempt -lt 3)
+          exit 1
 
       - name: Build and publish Windows installer
         run: npx electron-builder --win nsis --x64 --publish always

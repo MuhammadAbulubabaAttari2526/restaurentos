@@ -34,7 +34,8 @@
       {
         "provider": "github",
         "owner": "MuhammadAbulubabaAttari2526",
-        "repo": "restaurentos"
+        "repo": "restaurentos",
+        "releaseType": "release"
       }
     ],
     "nsis": {
