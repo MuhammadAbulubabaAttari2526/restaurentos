@@ -1496,6 +1496,7 @@ img.brand-mark {
   align-items: center;
   gap: 12px;
   justify-self: start;
+  top: 7px;
   color: #173b30;
   text-decoration: none;
 }
