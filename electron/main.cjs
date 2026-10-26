@@ -83,7 +83,7 @@ const { registerBackupIpc } = require('./ipc/backupIpc.cjs')
 const { registerUpdaterIpc } = require('./ipc/updaterIpc.cjs')
 const { getDb, closeDb } = require('../database/sqliteClient.cjs')
 const { createBackupSync, checkMissingDatabase } = require('../backup/backupManager.cjs')
-const { initAutoUpdater, stopUpdateTimers } = require('../updater/autoUpdater.cjs')
+const { initAutoUpdater, stopUpdateTimers, getUpdateStatus, installUpdateNow } = require('../updater/autoUpdater.cjs')
 const { syncWorker } = require('../sync/syncWorker.cjs')
 
 function openRendererDevTools(event) {
@@ -313,7 +313,20 @@ if (!gotLock) {
     })
   }).catch((error) => handleFatalError('RestaurantOS startup initialization failed.', error))
 
-  app.on('window-all-closed', () => {
+  app.on('window-all-closed', async () => {
+    let updateInstallStarted = false
+    if (process.platform !== 'darwin' && getUpdateStatus().status === 'downloaded') {
+      try {
+        const result = await installUpdateNow()
+        updateInstallStarted = result.success
+        if (!result.success) {
+          console.warn('[Updater] Automatic installation was deferred:', result.error)
+        }
+      } catch (error) {
+        writeMainLog('The downloaded update could not be installed during shutdown.', error)
+      }
+    }
+
     syncWorker.stop()
     stopUpdateTimers()
 
@@ -328,6 +341,6 @@ if (!gotLock) {
       databaseInitialized = false
     }
 
-    if (process.platform !== 'darwin') app.quit()
+    if (process.platform !== 'darwin' && !updateInstallStarted) app.quit()
   })
 }

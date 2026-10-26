@@ -90,3 +90,9 @@ For a packaged Electron app that connects to a remote Node API, set `VITE_API_BA
 - The app records payments but does not process cards or verify bank transfers.
 - Restaurant records are shared through MongoDB. Electron keeps a local SQLite copy and sync queue for offline work.
 - Preserve the existing Electron `appId` and `productName`; changing them changes the desktop data directory.
+
+## Desktop releases and mobile
+
+- Every push to `main` runs the Windows release workflow. It tests and builds the app, increments the desktop patch version, and publishes a Windows installer and update metadata to GitHub Releases using the repository's `GITHUB_TOKEN`.
+- Installed Windows apps check for releases, download updates in the background, and install them when RestaurantOS closes. The normal shutdown path creates an on-close database backup. Users can also choose the in-app restart action after an update is downloaded.
+- Android/Google Play distribution is not configured yet. The current offline POS and durable sync queue are Electron/SQLite-specific and are not available in the web app; Android needs its own native local-storage and synchronization implementation before it can safely support offline orders. Play Console listing and signing setup also require the publisher's account.

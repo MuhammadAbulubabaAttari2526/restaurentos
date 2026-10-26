@@ -103,7 +103,7 @@ export function UpdateNotifier() {
         {status === 'downloaded' && (
           <>
             <strong className="update-notifier__title">Update ready (v{version}) / Naya version tayyar hai</strong>
-            <span className="update-notifier__sub">Restart when it suits your shift / Apni sahulat se restart karein.</span>
+            <span className="update-notifier__sub">It will install automatically when you close RestaurantOS / App band karne par update khud install ho jayegi.</span>
           </>
         )}
         {actionError && <span className="update-notifier__error" role="alert">{actionError}</span>}

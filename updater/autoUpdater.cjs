@@ -1,7 +1,7 @@
 /**
  * Safe desktop updates through electron-updater and GitHub Releases.
- * Checks are automatic, downloads need a user click, and installation is
- * always explicit so a POS operation is never interrupted by an update.
+ * Checks and downloads are automatic. Installation uses the normal POS and
+ * SQLite safety checks, either explicitly or when the app closes.
  */
 
 const { autoUpdater } = require('electron-updater')
@@ -53,7 +53,7 @@ function initAutoUpdater(onStatusChange) {
     warn: (message) => console.warn('[Updater Warning]', message),
     error: (message) => console.warn('[Updater Error]', message),
   }
-  autoUpdater.autoDownload = false
+  autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.allowPrerelease = false
   autoUpdater.allowDowngrade = false
@@ -106,7 +106,7 @@ function initAutoUpdater(onStatusChange) {
   _checkInterval.unref?.()
 }
 
-/** Checks for updates quietly; it never downloads or installs one. */
+/** Checks for updates quietly; available updates download automatically. */
 async function checkForUpdatesSilently() {
   if (!app.isPackaged || _checkInProgress) return { success: true, data: getUpdateStatus() }
   if (['downloading', 'downloaded'].includes(_updateState.status)) {
@@ -127,7 +127,7 @@ async function checkForUpdatesSilently() {
   }
 }
 
-/** Starts a download only after the user chooses Update Now. */
+/** Starts a download automatically or after a user retry. */
 async function downloadUpdateNow() {
   if (!app.isPackaged) return { success: false, error: 'Updates are available in the installed desktop app.' }
   if (_updateState.status === 'downloading') return { success: true }
@@ -159,7 +159,7 @@ function countDurableQueuedChanges(db) {
   return result?.count || 0
 }
 
-/** Installs only from an explicit button, with in-flight operation and SQLite safety checks. */
+/** Installs with in-flight operation and SQLite safety checks. */
 async function installUpdateNow() {
   if (_updateState.status !== 'downloaded') {
     return { success: false, error: 'No downloaded update is ready to install.' }
