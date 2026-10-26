@@ -16,7 +16,9 @@ concurrency:
 jobs:
   release:
     if: github.actor != 'github-actions[bot]'
-    runs-on: windows-latest
+    runs-on: windows-2022
+    env:
+      npm_config_msvs_version: 2022
     steps:
       - name: Check out main
         uses: actions/checkout@v4
